@@ -1,9 +1,10 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.maven.publish)
 }
 
-group = "io.github.sergey"
+group = "io.github.rattenkrieg"
 version = "0.1.0-SNAPSHOT"
 
 dependencies {
@@ -30,4 +31,38 @@ tasks.register<JavaExec>("devServer") {
 
 kotlin {
     jvmToolchain(21)
+}
+
+mavenPublishing {
+    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
+    signAllPublications()
+
+    coordinates(group.toString(), "ktor-open-api-server", version.toString())
+
+    pom {
+        name.set("Ktor Open API Server")
+        description.set("Type-safe request/response handling for Ktor with automatic OpenAPI 3.1 spec generation")
+        url.set("https://github.com/Rattenkrieg/ktor-open-api-server")
+
+        licenses {
+            license {
+                name.set("MIT License")
+                url.set("https://opensource.org/licenses/MIT")
+            }
+        }
+
+        developers {
+            developer {
+                id.set("rattenkrieg")
+                name.set("Sergey")
+                url.set("https://github.com/Rattenkrieg")
+            }
+        }
+
+        scm {
+            connection.set("scm:git:https://github.com/Rattenkrieg/ktor-open-api-server.git")
+            developerConnection.set("scm:git:ssh://git@github.com:Rattenkrieg/ktor-open-api-server.git")
+            url.set("https://github.com/Rattenkrieg/ktor-open-api-server")
+        }
+    }
 }
