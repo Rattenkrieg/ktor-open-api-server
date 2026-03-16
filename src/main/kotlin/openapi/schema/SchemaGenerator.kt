@@ -88,8 +88,17 @@ object SchemaGenerator {
     }
 
     private fun handleMap(type: KType, cache: MutableMap<String, JsonSchema>): JsonSchema {
-        require(type.arguments.first().type?.classifier as KClass<*> == String::class) {
-            "JSON requires that map keys MUST be Strings. Got ${type.arguments.first().type}"
+        val keyType = type.arguments.firstOrNull()?.type
+        val keyClass = keyType?.classifier as? KClass<*>
+        if (keyClass == null || type.arguments.size < 2) {
+            val definition = MapDefinition(TypeDefinition(type = "object"))
+            return when (type.isMarkedNullable) {
+                true -> OneOfDefinition(NullableDefinition(), definition)
+                false -> definition
+            }
+        }
+        require(keyClass == String::class || keyClass.isSubclassOf(Enum::class)) {
+            "JSON requires that map keys MUST be Strings or Enums. Got $keyType"
         }
         val valueType = type.arguments[1].type ?: error("Map value type argument missing")
         val valueSchema = fromTypeToSchema(valueType, cache).let {

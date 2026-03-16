@@ -178,6 +178,29 @@ fun buildResponsePayloadSpec(
     cache: MutableMap<String, JsonSchema>
 ): MutableMap<Int, Response> {
     val responseClass = responseType.classifier as KClass<*>
+    if (responseClass.isSealed) {
+        val responses = mutableMapOf<Int, Response>()
+        for (subclass in responseClass.sealedSubclasses) {
+            val subType = resolveSubclassType(subclass)
+            val subResponses = buildSingleResponseSpec(subclass, subType, cache)
+            responses.putAll(subResponses)
+        }
+        return responses
+    }
+    return buildSingleResponseSpec(responseClass, responseType, cache)
+}
+
+private fun resolveSubclassType(
+    subclass: KClass<*>,
+): KType {
+    return subclass.primaryConstructor?.returnType ?: subclass.supertypes.first()
+}
+
+private fun buildSingleResponseSpec(
+    responseClass: KClass<*>,
+    responseType: KType,
+    cache: MutableMap<String, JsonSchema>
+): MutableMap<Int, Response> {
     if (responseClass.isSubclassOf(StreamResponsePayload::class)) {
         val resolvedStatusCode = resolveResponsePayloadStatusCode(responseClass)
         return mutableMapOf(resolvedStatusCode.value to Response(description = resolvedStatusCode.description))
@@ -205,7 +228,7 @@ fun buildResponsePayloadSpec(
                 } else {
                     bodyTypeArg
                 }
-                bodySchema = SchemaGenerator.fromTypeToSchema(resolvedBodyType, cache)
+                bodySchema = SchemaGenerator.fromTypeOrUnit(resolvedBodyType, cache)
             }
             classifier == ResponseHeader::class -> {
                 responseHeaders[paramName] = Header(
@@ -231,7 +254,12 @@ fun buildResponsePayloadSpec(
 fun resolveResponsePayloadStatusCode(responseClass: KClass<*>): HttpStatusCode {
     val objectInstance = responseClass.objectInstance
     if (objectInstance is ResponsePayload) return objectInstance.statusCode
+    if (responseClass.isSubclassOf(RedirectResponse::class)) return HttpStatusCode.Found
+    if (responseClass.isSubclassOf(InternalServerErrorResponsePayload::class)) return HttpStatusCode.InternalServerError
+    if (responseClass.isSubclassOf(NotFoundResponsePayload::class)) return HttpStatusCode.NotFound
+    if (responseClass.isSubclassOf(BadRequestResponsePayload::class)) return HttpStatusCode.BadRequest
     if (responseClass.isSubclassOf(NoContentResponsePayload::class)) return HttpStatusCode.NoContent
+    if (responseClass.isSubclassOf(AcceptedResponsePayload::class)) return HttpStatusCode.Accepted
     if (responseClass.isSubclassOf(CreatedResponsePayload::class)) return HttpStatusCode.Created
     if (responseClass.isSubclassOf(OkResponsePayload::class)) return HttpStatusCode.OK
     val constructor = responseClass.primaryConstructor ?: return HttpStatusCode.OK

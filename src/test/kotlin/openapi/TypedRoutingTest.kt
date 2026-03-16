@@ -108,6 +108,34 @@ data class RedirectPayload(
     val id: PathParam,
 ) : RequestPayload
 
+@Serializable
+data class ErrorDetail(val code: String, val message: String)
+
+sealed interface ExternalLinkResult : ResponsePayload {
+    class Redirect(url: String) : RedirectResponse(url, permanent = false), ExternalLinkResult
+    object Missing : NotFoundResponsePayload(), ExternalLinkResult
+}
+
+sealed interface ProcessResult : ResponsePayload {
+    data class Success(val body: ResponseBody<UserResponse>) : CreatedResponsePayload(), ProcessResult {
+        constructor(value: UserResponse) : this(ResponseBody(value))
+    }
+    data class Invalid(val body: ResponseBody<ErrorDetail>) : BadRequestResponsePayload(), ProcessResult {
+        constructor(value: ErrorDetail) : this(ResponseBody(value))
+    }
+    data class Missing(val body: ResponseBody<ErrorDetail>) : NotFoundResponsePayload(), ProcessResult {
+        constructor(value: ErrorDetail) : this(ResponseBody(value))
+    }
+    object Failed : InternalServerErrorResponsePayload(), ProcessResult
+}
+
+sealed interface SimpleResult : ResponsePayload {
+    object Done : NoContentResponsePayload(), SimpleResult
+    data class Error(val body: ResponseBody<ErrorDetail>) : BadRequestResponsePayload(), SimpleResult {
+        constructor(value: ErrorDetail) : this(ResponseBody(value))
+    }
+}
+
 class TypedRoutingTest : ShouldSpec({
 
     fun openApiSpec() = OpenApiSpec(info = Info(title = "Test API", version = "1.0.0"))
@@ -976,8 +1004,214 @@ class TypedRoutingTest : ShouldSpec({
             getOp.shouldNotBeNull()
             val responses = getOp["responses"]?.jsonObject
             responses.shouldNotBeNull()
-            responses["200"].shouldNotBeNull()
-            responses["200"]?.jsonObject?.get("content") shouldBe null
+            responses["302"].shouldNotBeNull()
+            responses["302"]?.jsonObject?.get("content") shouldBe null
+        }
+    }
+
+    should("return correct status and body for each sealed response variant") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}/process") {
+                    typedPost<StreamPayload, ProcessResult> {
+                        when (payload.id.value) {
+                            "ok" -> ProcessResult.Success(UserResponse("1", "a@b.com", "User"))
+                            "bad" -> ProcessResult.Invalid(ErrorDetail("INVALID", "bad request"))
+                            "missing" -> ProcessResult.Missing(ErrorDetail("NOT_FOUND", "not found"))
+                            else -> ProcessResult.Failed
+                        }
+                    }
+                }
+            }
+            val created = client.post("/items/ok/process")
+            created.status shouldBe HttpStatusCode.Created
+            Json.decodeFromString<UserResponse>(created.bodyAsText()).id shouldBe "1"
+            val badRequest = client.post("/items/bad/process")
+            badRequest.status shouldBe HttpStatusCode.BadRequest
+            Json.decodeFromString<ErrorDetail>(badRequest.bodyAsText()).code shouldBe "INVALID"
+            val notFound = client.post("/items/missing/process")
+            notFound.status shouldBe HttpStatusCode.NotFound
+            val failed = client.post("/items/other/process")
+            failed.status shouldBe HttpStatusCode.InternalServerError
+        }
+    }
+
+    should("generate spec with multiple responses for sealed response type") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}/process") {
+                    typedPost<StreamPayload, ProcessResult> {
+                        ProcessResult.Success(UserResponse("1", "a@b.com", "User"))
+                    }
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val postOp = specJson["paths"]?.jsonObject
+                ?.get("/items/{id}/process")?.jsonObject
+                ?.get("post")?.jsonObject
+            postOp.shouldNotBeNull()
+            val responses = postOp["responses"]?.jsonObject
+            responses.shouldNotBeNull()
+            responses["201"].shouldNotBeNull()
+            responses["201"]?.jsonObject?.get("content").shouldNotBeNull()
+            responses["400"].shouldNotBeNull()
+            responses["400"]?.jsonObject?.get("content").shouldNotBeNull()
+            responses["404"].shouldNotBeNull()
+            responses["404"]?.jsonObject?.get("content").shouldNotBeNull()
+            responses["500"].shouldNotBeNull()
+            responses["500"]?.jsonObject?.get("content") shouldBe null
+        }
+    }
+
+    should("generate spec with multiple responses for simple sealed type") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}") {
+                    typedDelete<DeleteUserPayload, SimpleResult> {
+                        SimpleResult.Done
+                    }
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val deleteOp = specJson["paths"]?.jsonObject
+                ?.get("/items/{id}")?.jsonObject
+                ?.get("delete")?.jsonObject
+            deleteOp.shouldNotBeNull()
+            val responses = deleteOp["responses"]?.jsonObject
+            responses.shouldNotBeNull()
+            responses["204"].shouldNotBeNull()
+            responses["204"]?.jsonObject?.get("content") shouldBe null
+            responses["400"].shouldNotBeNull()
+            responses["400"]?.jsonObject?.get("content").shouldNotBeNull()
+        }
+    }
+
+    should("set Content-Disposition header on ByteStreamResponse with fileName") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}/export") {
+                    typedGet<StreamPayload, ByteStreamResponse> {
+                        ByteStreamResponse(ContentType.Application.OctetStream, fileName = "report.zip") {
+                            write("binary-data".toByteArray())
+                        }
+                    }
+                }
+            }
+            val response = client.get("/items/42/export")
+            response.status shouldBe HttpStatusCode.OK
+            response.headers[HttpHeaders.ContentDisposition] shouldBe "attachment; filename=report.zip"
+            response.bodyAsText() shouldBe "binary-data"
+        }
+    }
+
+    should("set Content-Disposition header on TextStreamResponse with fileName") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}/csv") {
+                    typedGet<StreamPayload, TextStreamResponse> {
+                        TextStreamResponse(ContentType.Text.CSV, fileName = "report.csv") {
+                            write("name,value\n")
+                        }
+                    }
+                }
+            }
+            val response = client.get("/items/42/csv")
+            response.status shouldBe HttpStatusCode.OK
+            response.headers[HttpHeaders.ContentDisposition] shouldBe "attachment; filename=report.csv"
+            response.bodyAsText() shouldBe "name,value\n"
+        }
+    }
+
+    should("not set Content-Disposition header when fileName is null") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}/export") {
+                    typedGet<StreamPayload, ByteStreamResponse> {
+                        ByteStreamResponse(ContentType.Application.OctetStream) {
+                            write("data".toByteArray())
+                        }
+                    }
+                }
+            }
+            val response = client.get("/items/42/export")
+            response.status shouldBe HttpStatusCode.OK
+            response.headers[HttpHeaders.ContentDisposition] shouldBe null
+        }
+    }
+
+    should("return correct status for sealed redirect-or-404") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}/external-link") {
+                    typedGet<StreamPayload, ExternalLinkResult> {
+                        when (payload.id.value) {
+                            "exists" -> ExternalLinkResult.Redirect("https://example.com/doc")
+                            else -> ExternalLinkResult.Missing
+                        }
+                    }
+                }
+            }
+            val noFollowClient = createClient { followRedirects = false }
+            val redirect = noFollowClient.get("/items/exists/external-link")
+            redirect.status shouldBe HttpStatusCode.Found
+            redirect.headers["Location"] shouldBe "https://example.com/doc"
+            val missing = noFollowClient.get("/items/other/external-link")
+            missing.status shouldBe HttpStatusCode.NotFound
+        }
+    }
+
+    should("generate spec with 302 and 404 for sealed redirect-or-404") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}/external-link") {
+                    typedGet<StreamPayload, ExternalLinkResult> {
+                        ExternalLinkResult.Missing
+                    }
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val getOp = specJson["paths"]?.jsonObject
+                ?.get("/items/{id}/external-link")?.jsonObject
+                ?.get("get")?.jsonObject
+            getOp.shouldNotBeNull()
+            val responses = getOp["responses"]?.jsonObject
+            responses.shouldNotBeNull()
+            responses["302"].shouldNotBeNull()
+            responses["302"]?.jsonObject?.get("content") shouldBe null
+            responses["404"].shouldNotBeNull()
+            responses["404"]?.jsonObject?.get("content") shouldBe null
         }
     }
 

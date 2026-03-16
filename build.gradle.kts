@@ -14,7 +14,6 @@ dependencies {
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.kotlin.reflect)
 
-    testImplementation(libs.ktor.server.netty)
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
@@ -24,10 +23,6 @@ tasks.test {
     useJUnitPlatform()
 }
 
-tasks.register<JavaExec>("devServer") {
-    classpath = sourceSets.test.get().runtimeClasspath
-    mainClass.set("openapi.dev.DevServerKt")
-}
 
 kotlin {
     jvmToolchain(21)

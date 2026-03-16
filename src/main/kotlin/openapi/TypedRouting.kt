@@ -2,6 +2,7 @@ package openapi
 
 import io.ktor.http.*
 import io.ktor.http.content.*
+import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -165,15 +166,31 @@ suspend fun <P : RequestPayload> RoutingContext.handleTypedRoute(
 }
 
 suspend fun sendResponsePayload(
-    call: RoutingCall,
+    call: ApplicationCall,
     response: ResponsePayload
 ) {
     when (response) {
         is ByteStreamResponse -> {
+            response.fileName?.let {
+                call.response.header(
+                    HttpHeaders.ContentDisposition,
+                    ContentDisposition.Attachment.withParameter(
+                        ContentDisposition.Parameters.FileName, it
+                    ).toString()
+                )
+            }
             call.respondOutputStream(response.contentType, response.statusCode) { response.writer(this) }
             return
         }
         is TextStreamResponse -> {
+            response.fileName?.let {
+                call.response.header(
+                    HttpHeaders.ContentDisposition,
+                    ContentDisposition.Attachment.withParameter(
+                        ContentDisposition.Parameters.FileName, it
+                    ).toString()
+                )
+            }
             call.respondTextWriter(response.contentType, response.statusCode) { response.writer(this) }
             return
         }

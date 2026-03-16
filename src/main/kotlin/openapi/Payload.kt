@@ -34,32 +34,32 @@ sealed class StreamResponsePayload(
     override val statusCode: HttpStatusCode,
 ) : ResponsePayload
 
-class ByteStreamResponse(
+open class ByteStreamResponse(
     val contentType: ContentType,
     statusCode: HttpStatusCode = HttpStatusCode.OK,
+    val fileName: String? = null,
     val writer: suspend OutputStream.() -> Unit,
 ) : StreamResponsePayload(statusCode)
 
-class TextStreamResponse(
+open class TextStreamResponse(
     val contentType: ContentType,
     statusCode: HttpStatusCode = HttpStatusCode.OK,
+    val fileName: String? = null,
     val writer: suspend Writer.() -> Unit,
 ) : StreamResponsePayload(statusCode)
 
-class RedirectResponse(
+open class RedirectResponse(
     val url: String,
     permanent: Boolean,
 ) : StreamResponsePayload(if (permanent) HttpStatusCode.MovedPermanently else HttpStatusCode.Found)
 
 abstract class OkResponsePayload : ResponsePayload
-
-abstract class CreatedResponsePayload : ResponsePayload {
-    override val statusCode get() = HttpStatusCode.Created
-}
-
-abstract class NoContentResponsePayload : ResponsePayload {
-    override val statusCode get() = HttpStatusCode.NoContent
-}
+abstract class AcceptedResponsePayload : ResponsePayload { override val statusCode = HttpStatusCode.Accepted }
+abstract class CreatedResponsePayload : ResponsePayload { override val statusCode = HttpStatusCode.Created }
+abstract class NoContentResponsePayload : ResponsePayload { override val statusCode = HttpStatusCode.NoContent }
+abstract class BadRequestResponsePayload : ResponsePayload { override val statusCode = HttpStatusCode.BadRequest }
+abstract class NotFoundResponsePayload : ResponsePayload { override val statusCode = HttpStatusCode.NotFound }
+abstract class InternalServerErrorResponsePayload : ResponsePayload { override val statusCode = HttpStatusCode.InternalServerError }
 
 sealed interface ResponsePayloadItem<out T> {
     val value: T
