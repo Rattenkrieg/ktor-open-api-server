@@ -70,8 +70,14 @@ object SchemaGenerator {
     }
 
     private fun handleCollection(type: KType, cache: MutableMap<String, JsonSchema>): JsonSchema {
-        val elementType = type.arguments.first().type
-            ?: error("Collection type argument missing")
+        val elementType = type.arguments.firstOrNull()?.type
+        if (elementType == null) {
+            val definition = ArrayDefinition(TypeDefinition(type = "object"))
+            return when (type.isMarkedNullable) {
+                true -> OneOfDefinition(NullableDefinition(), definition)
+                false -> definition
+            }
+        }
         val elementSchema = fromTypeToSchema(elementType, cache).let {
             if (it.isObjectOrEnum()) {
                 cache[elementType.slug()] = it
@@ -97,9 +103,8 @@ object SchemaGenerator {
                 false -> definition
             }
         }
-        require(keyClass == String::class || keyClass.isSubclassOf(Enum::class)) {
-            "JSON requires that map keys MUST be Strings or Enums. Got $keyType"
-        }
+        // Map keys must serialize as strings in JSON. String, Enum, value classes,
+        // and any type with a string-based serializer are all valid.
         val valueType = type.arguments[1].type ?: error("Map value type argument missing")
         val valueSchema = fromTypeToSchema(valueType, cache).let {
             if (it is TypeDefinition && it.type == "object") {
@@ -267,7 +272,7 @@ private const val COMPONENT_SLUG = "#/components/schemas"
 fun KType.slug(): String = when {
     arguments.isNotEmpty() -> {
         val clazz = classifier as KClass<*>
-        val classNames = arguments.map { (it.type?.classifier as KClass<*>).schemaSlug() }
+        val classNames = arguments.map { (it.type?.classifier as? KClass<*>)?.schemaSlug() ?: "Any" }
         classNames.joinToString(separator = "-", prefix = "${clazz.schemaSlug()}-")
     }
     else -> (classifier as KClass<*>).schemaSlug()
