@@ -13,6 +13,7 @@ import kotlin.reflect.KType
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.full.primaryConstructor
+import kotlin.reflect.jvm.isAccessible
 import kotlin.reflect.typeOf
 
 class AlternateResponseException(val response: ResponsePayload) : Exception()
@@ -212,6 +213,7 @@ suspend fun sendResponsePayload(
             val classifier = paramType.classifier as KClass<*>
             val paramName = param.name ?: continue
             val member = kClass.members.first { it.name == paramName }
+            member.isAccessible = true
             val value = member.call(response) ?: continue
             when {
                 classifier.isSubclassOf(ResponseBody::class) -> {
