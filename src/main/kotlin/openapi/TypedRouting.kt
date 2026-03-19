@@ -226,7 +226,7 @@ suspend fun sendResponsePayload(
         }
     }
     when {
-        body != null -> call.respond(statusCode, body)
+        body != null && body != Unit -> call.respond(statusCode, body)
         !hasResponseBody && hasDataProperties -> call.respond(statusCode, response)
         else -> call.respond(statusCode)
     }
