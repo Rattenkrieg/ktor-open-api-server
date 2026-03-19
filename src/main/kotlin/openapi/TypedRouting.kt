@@ -255,6 +255,7 @@ suspend fun extractPayload(call: RoutingCall, payloadType: KType): Any {
             classifier.isSubclassOf(Body::class) -> {
                 val bodyType = paramType.arguments[0].type!!
                 val bodyClass = bodyType.classifier as KClass<*>
+                @Suppress("DEPRECATION")
                 val typeInfo = TypeInfo(bodyClass, bodyClass.java, bodyType)
                 if (paramType.isMarkedNullable) {
                     runCatching { call.receive<Any>(typeInfo) }.getOrNull()?.let { Body(it) }
@@ -318,8 +319,12 @@ suspend fun extractPayload(call: RoutingCall, payloadType: KType): Any {
                 val principalType = paramType.arguments[0].type!!
                 val principalClass = principalType.classifier as KClass<*>
                 val principal = call.authentication.principal(null, principalClass)
-                    ?: error("No authenticated principal of type ${principalClass.simpleName}")
-                Principal(principal)
+                if (paramType.isMarkedNullable) {
+                    principal?.let { Principal(it) }
+                } else {
+                    Principal(principal
+                        ?: error("No authenticated principal of type ${principalClass.simpleName}"))
+                }
             }
             else -> error("Payload property '$paramName' must be a RequestPayloadItem type (Body, PathParam, QueryParam, QueryParamList, HeaderParam, CookieParam, Principal, AcceptHeader, MultipartBody, RequestOrigin), got: ${classifier.simpleName}")
         }
