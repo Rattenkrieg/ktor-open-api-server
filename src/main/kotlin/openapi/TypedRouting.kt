@@ -239,7 +239,7 @@ fun registerRouteSpec(
     responseType: KType
 ) {
     val path = route.fullPath()
-    val spec = route.application.attributes[OpenApiSpecKey]
+    val spec = route.application.attributes.getOrNull(OpenApiSpecKey) ?: return
     addRouteToSpec(spec, path, method, payloadType, responseType)
 }
 
