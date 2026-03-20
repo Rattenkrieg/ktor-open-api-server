@@ -262,9 +262,10 @@ suspend fun extractPayload(call: RoutingCall, payloadType: KType): Any {
                 @Suppress("DEPRECATION")
                 val typeInfo = TypeInfo(bodyClass, bodyClass.java, bodyType)
                 if (paramType.isMarkedNullable) {
-                    runCatching { call.receive<Any>(typeInfo) }.getOrNull()?.let { Body(it) }
+                    runCatching { call.receive<Any>(typeInfo) }.getOrNull()?.let { Body { it } }
                 } else {
-                    Body(call.receive(typeInfo))
+                    val capturedCall = call
+                    Body { capturedCall.receive(typeInfo) }
                 }
             }
             classifier == PathParam::class -> {

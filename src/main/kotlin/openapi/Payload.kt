@@ -11,7 +11,12 @@ sealed interface RequestPayloadItem<out T> {
     val value: T
 }
 
-data class Body<T : Any>(override val value: T) : RequestPayloadItem<T>
+class Body<T : Any>(private val receiver: suspend () -> T) : RequestPayloadItem<T> {
+    private var cached: T? = null
+    @Deprecated("Use suspend value() instead", ReplaceWith("value()"))
+    override val value: T get() = cached ?: error("Body not yet received. Use suspend value() function.")
+    suspend fun value(): T = cached ?: receiver().also { cached = it }
+}
 data class PathParam(override val value: String) : RequestPayloadItem<String>
 data class QueryParam(override val value: String) : RequestPayloadItem<String>
 data class QueryParamList(override val value: List<String>) : RequestPayloadItem<List<String>>

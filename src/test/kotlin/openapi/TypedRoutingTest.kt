@@ -151,8 +151,8 @@ class TypedRoutingTest : ShouldSpec({
                     typedPost<CreateUserPayload, UserResponse> {
                         UserResponse(
                             id = "generated-id",
-                            email = payload.body.value.email,
-                            name = payload.body.value.name
+                            email = payload.body.value().email,
+                            name = payload.body.value().name
                         )
                     }
                 }
@@ -200,8 +200,8 @@ class TypedRoutingTest : ShouldSpec({
                     typedPost<PayloadWithHeader, UserResponse> {
                         UserResponse(
                             id = payload.`X-Idempotency-Key`.value,
-                            email = payload.body.value.email,
-                            name = payload.body.value.name
+                            email = payload.body.value().email,
+                            name = payload.body.value().name
                         )
                     }
                 }
@@ -257,7 +257,7 @@ class TypedRoutingTest : ShouldSpec({
             routing {
                 route("/api/v1/companies/{companyId}/users") {
                     typedPost<CreateUserPayload, CreatedUserDirectResponse> {
-                        CreatedUserDirectResponse("1", payload.body.value.email, payload.body.value.name)
+                        CreatedUserDirectResponse("1", payload.body.value().email, payload.body.value().name)
                     }
                 }
             }
@@ -312,7 +312,7 @@ class TypedRoutingTest : ShouldSpec({
             routing {
                 route("/api/v1/companies/{companyId}/users") {
                     typedPost<CreateUserPayload, UserResponse> {
-                        UserResponse("1", payload.body.value.email, payload.body.value.name)
+                        UserResponse("1", payload.body.value().email, payload.body.value().name)
                     }
                     typedGet<GetUsersPayload, Ok<List<UserResponse>>> {
                         Ok(listOf())
@@ -356,7 +356,7 @@ class TypedRoutingTest : ShouldSpec({
                 route("/api/v1/companies/{companyId}/users") {
                     typedPost<CreateUserPayload, CreatedUserResponse> {
                         CreatedUserResponse(
-                            body = ResponseBody(UserResponse("1", payload.body.value.email, payload.body.value.name))
+                            body = ResponseBody(UserResponse("1", payload.body.value().email, payload.body.value().name))
                         )
                     }
                 }
@@ -389,7 +389,7 @@ class TypedRoutingTest : ShouldSpec({
                 route("/api/v1/companies/{companyId}/users") {
                     typedPost<CreateUserPayload, UserResponseWithHeader> {
                         UserResponseWithHeader(
-                            body = ResponseBody(UserResponse("1", payload.body.value.email, payload.body.value.name)),
+                            body = ResponseBody(UserResponse("1", payload.body.value().email, payload.body.value().name)),
                             `X-Request-Id` = ResponseHeader("req-abc-123"),
                         )
                     }
@@ -822,7 +822,7 @@ class TypedRoutingTest : ShouldSpec({
             routing {
                 route("/items/{id}/approve") {
                     typedPost<NullableBodyPayload, Ok<Map<String, String>>> {
-                        val email = payload.body?.value?.email ?: "none"
+                        val email = payload.body?.value()?.email ?: "none"
                         Ok(mapOf("id" to payload.id.value, "email" to email))
                     }
                 }
