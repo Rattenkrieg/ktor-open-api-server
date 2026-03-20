@@ -240,7 +240,11 @@ fun registerRouteSpec(
 ) {
     val path = route.fullPath()
     val spec = route.application.attributes.getOrNull(OpenApiSpecKey) ?: return
-    addRouteToSpec(spec, path, method, payloadType, responseType)
+    try {
+        addRouteToSpec(spec, path, method, payloadType, responseType)
+    } catch (e: Exception) {
+        route.application.log.warn("Failed to register OpenAPI spec for $method $path: ${e.message}")
+    }
 }
 
 suspend fun extractPayload(call: RoutingCall, payloadType: KType): Any {
