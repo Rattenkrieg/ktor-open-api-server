@@ -109,6 +109,9 @@ data class RedirectPayload(
 ) : RequestPayload
 
 @Serializable
+data class PageResult<T>(val data: List<T>, val nextPage: String?)
+
+@Serializable
 data class ErrorDetail(val code: String, val message: String)
 
 sealed interface ExternalLinkResult : ResponsePayload {
@@ -1238,6 +1241,54 @@ class TypedRoutingTest : ShouldSpec({
             val paths = specJson["paths"]?.jsonObject?.keys
             paths.shouldNotBeNull()
             paths shouldContain "/items/{id}"
+        }
+    }
+
+    should("serialize generic body type in Ok wrapper using correct TypeInfo") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/api/v1/companies/{companyId}/users") {
+                    typedGet<GetUsersPayload, Ok<PageResult<UserResponse>>> {
+                        Ok(PageResult(
+                            data = listOf(UserResponse("1", "a@b.com", "User1")),
+                            nextPage = "page2",
+                        ))
+                    }
+                }
+            }
+            val response = client.get("/api/v1/companies/abc-123/users")
+            response.status shouldBe HttpStatusCode.OK
+            val body = Json.decodeFromString<PageResult<UserResponse>>(response.bodyAsText())
+            body.data.size shouldBe 1
+            body.data[0].id shouldBe "1"
+            body.data[0].email shouldBe "a@b.com"
+            body.nextPage shouldBe "page2"
+        }
+    }
+
+    should("serialize direct @Serializable response payload with data properties") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/api/v1/companies/{companyId}/users") {
+                    typedGet<GetUsersPayload, UserResponse> {
+                        UserResponse("1", "a@b.com", "User1")
+                    }
+                }
+            }
+            val response = client.get("/api/v1/companies/abc-123/users")
+            response.status shouldBe HttpStatusCode.OK
+            val body = Json.decodeFromString<UserResponse>(response.bodyAsText())
+            body.id shouldBe "1"
+            body.email shouldBe "a@b.com"
+            body.name shouldBe "User1"
         }
     }
 })

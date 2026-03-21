@@ -10,6 +10,7 @@ import io.ktor.server.routing.*
 import io.ktor.util.reflect.*
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
+import kotlin.reflect.full.createType
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.full.primaryConstructor
@@ -85,7 +86,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
     val payloadType = typeOf<P>()
     val responseType = typeOf<R>()
     registerRouteSpec(this, HttpMethod.Get, payloadType, responseType)
-    return httpMethod(HttpMethod.Get, payloadType, handler)
+    return httpMethod(HttpMethod.Get, payloadType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPost(
@@ -99,7 +100,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
     val payloadType = typeOf<P>()
     val responseType = typeOf<R>()
     registerRouteSpec(this, HttpMethod.Post, payloadType, responseType)
-    return httpMethod(HttpMethod.Post, payloadType, handler)
+    return httpMethod(HttpMethod.Post, payloadType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPut(
@@ -113,7 +114,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
     val payloadType = typeOf<P>()
     val responseType = typeOf<R>()
     registerRouteSpec(this, HttpMethod.Put, payloadType, responseType)
-    return httpMethod(HttpMethod.Put, payloadType, handler)
+    return httpMethod(HttpMethod.Put, payloadType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedDelete(
@@ -127,7 +128,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
     val payloadType = typeOf<P>()
     val responseType = typeOf<R>()
     registerRouteSpec(this, HttpMethod.Delete, payloadType, responseType)
-    return httpMethod(HttpMethod.Delete, payloadType, handler)
+    return httpMethod(HttpMethod.Delete, payloadType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
@@ -141,17 +142,19 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
     val payloadType = typeOf<P>()
     val responseType = typeOf<R>()
     registerRouteSpec(this, HttpMethod.Patch, payloadType, responseType)
-    return httpMethod(HttpMethod.Patch, payloadType, handler)
+    return httpMethod(HttpMethod.Patch, payloadType, responseType, handler)
 }
 
 fun <P : RequestPayload> Route.httpMethod(
     method: HttpMethod,
     payloadType: KType,
+    responseType: KType,
     handler: suspend TypedContext<P>.() -> Any
-): Route = method(method) { handle { handleTypedRoute(payloadType, handler) } }
+): Route = method(method) { handle { handleTypedRoute(payloadType, responseType, handler) } }
 
 suspend fun <P : RequestPayload> RoutingContext.handleTypedRoute(
     payloadType: KType,
+    responseType: KType,
     handler: suspend TypedContext<P>.() -> Any
 ) {
     @Suppress("UNCHECKED_CAST")
@@ -162,12 +165,20 @@ suspend fun <P : RequestPayload> RoutingContext.handleTypedRoute(
     } catch (e: AlternateResponseException) {
         e.response
     }
-    sendResponsePayload(call, response as ResponsePayload)
+    sendResponsePayload(call, response as ResponsePayload, responseType)
 }
 
 suspend fun sendResponsePayload(
     call: ApplicationCall,
-    response: ResponsePayload
+    response: ResponsePayload,
+) {
+    sendResponsePayload(call, response, response::class.createType())
+}
+
+suspend fun sendResponsePayload(
+    call: ApplicationCall,
+    response: ResponsePayload,
+    responseType: KType,
 ) {
     when (response) {
         is ByteStreamResponse -> {
@@ -206,6 +217,8 @@ suspend fun sendResponsePayload(
     var body: Any? = null
     var hasResponseBody = false
     var hasDataProperties = false
+    val responseClass = responseType.classifier as? KClass<*>
+    val typeParamMap = buildTypeParameterMap(responseClass, responseType)
     if (constructor != null) {
         for (param in constructor.parameters) {
             val paramType = param.type
@@ -226,10 +239,48 @@ suspend fun sendResponsePayload(
         }
     }
     when {
-        body != null && body != Unit -> call.respond(statusCode, body)
-        !hasResponseBody && hasDataProperties -> call.respond(statusCode, response)
+        body != null && body != Unit -> {
+            val bodyType = resolveBodyType(responseClass, typeParamMap)
+                ?: resolveBodyType(kClass, mapOf())
+            val typeInfo = bodyType?.let { TypeInfo(body!!::class, it) }
+                ?: TypeInfo(body!!::class)
+            call.respond(statusCode, body!!, typeInfo)
+        }
+        !hasResponseBody && hasDataProperties -> {
+            val typeInfo = TypeInfo(kClass, responseType)
+            call.respond(statusCode, response, typeInfo)
+        }
         else -> call.respond(statusCode)
     }
+}
+
+private fun buildTypeParameterMap(kClass: KClass<*>?, responseType: KType): Map<KType, KType> {
+    if (kClass == null) return mapOf()
+    val typeParameters = kClass.typeParameters
+    val typeArguments = responseType.arguments
+    val map = mutableMapOf<KType, KType>()
+    for (i in typeParameters.indices) {
+        val resolved = typeArguments.getOrNull(i)?.type ?: continue
+        map[typeParameters[i].createType()] = resolved
+    }
+    return map
+}
+
+private fun resolveBodyType(
+    responseClass: KClass<*>?,
+    typeParamMap: Map<KType, KType>,
+): KType? {
+    if (responseClass == null) return null
+    val constructor = responseClass.primaryConstructor ?: return null
+    for (param in constructor.parameters) {
+        val paramType = param.type
+        val classifier = paramType.classifier as? KClass<*> ?: continue
+        if (classifier.isSubclassOf(ResponseBody::class)) {
+            val rawType = paramType.arguments.firstOrNull()?.type ?: return null
+            return typeParamMap[rawType] ?: rawType
+        }
+    }
+    return null
 }
 
 fun registerRouteSpec(
@@ -259,13 +310,13 @@ suspend fun extractPayload(call: RoutingCall, payloadType: KType): Any {
             classifier.isSubclassOf(Body::class) -> {
                 val bodyType = paramType.arguments[0].type!!
                 val bodyClass = bodyType.classifier as KClass<*>
-                @Suppress("DEPRECATION")
-                val typeInfo = TypeInfo(bodyClass, bodyClass.java, bodyType)
+                val typeInfo = TypeInfo(bodyClass, bodyType)
                 if (paramType.isMarkedNullable) {
-                    runCatching { call.receive<Any>(typeInfo) }.getOrNull()?.let { Body { it } }
+                    runCatching { call.receive<Any>(typeInfo) }.getOrNull()?.let { received -> Body { received } }
                 } else {
-                    val capturedCall = call
-                    Body { capturedCall.receive(typeInfo) }
+                    @Suppress("RedundantSuspendModifier")
+                    val eagerResult = call.receive<Any>(typeInfo)
+                    Body { eagerResult }
                 }
             }
             classifier == PathParam::class -> {
