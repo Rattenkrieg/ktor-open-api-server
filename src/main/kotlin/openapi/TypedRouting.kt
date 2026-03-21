@@ -8,6 +8,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.util.reflect.*
+import kotlinx.serialization.json.JsonElement
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 import kotlin.reflect.full.createType
@@ -217,8 +218,6 @@ suspend fun sendResponsePayload(
     var body: Any? = null
     var hasResponseBody = false
     var hasDataProperties = false
-    val responseClass = responseType.classifier as? KClass<*>
-    val typeParamMap = buildTypeParameterMap(responseClass, responseType)
     if (constructor != null) {
         for (param in constructor.parameters) {
             val paramType = param.type
@@ -240,11 +239,19 @@ suspend fun sendResponsePayload(
     }
     when {
         body != null && body != Unit -> {
-            val bodyType = resolveBodyType(responseClass, typeParamMap)
-                ?: resolveBodyType(kClass, mapOf())
-            val typeInfo = bodyType?.let { TypeInfo(body!!::class, it) }
-                ?: TypeInfo(body!!::class)
-            call.respond(statusCode, body!!, typeInfo)
+            if (body is JsonElement) {
+                call.respond(statusCode, body, TypeInfo(JsonElement::class))
+            } else if (body!!::class.typeParameters.isNotEmpty()) {
+                val bodyType = resolveBodyType(responseType)
+                    ?: resolveBodyType(kClass.createType())
+                if (bodyType != null) {
+                    call.respond(statusCode, body, TypeInfo(body::class, bodyType))
+                } else {
+                    call.respond(statusCode, body)
+                }
+            } else {
+                call.respond(statusCode, body)
+            }
         }
         !hasResponseBody && hasDataProperties -> {
             val typeInfo = TypeInfo(kClass, responseType)
@@ -254,30 +261,20 @@ suspend fun sendResponsePayload(
     }
 }
 
-private fun buildTypeParameterMap(kClass: KClass<*>?, responseType: KType): Map<KType, KType> {
-    if (kClass == null) return mapOf()
-    val typeParameters = kClass.typeParameters
-    val typeArguments = responseType.arguments
-    val map = mutableMapOf<KType, KType>()
-    for (i in typeParameters.indices) {
-        val resolved = typeArguments.getOrNull(i)?.type ?: continue
-        map[typeParameters[i].createType()] = resolved
-    }
-    return map
-}
-
-private fun resolveBodyType(
-    responseClass: KClass<*>?,
-    typeParamMap: Map<KType, KType>,
-): KType? {
-    if (responseClass == null) return null
+private fun resolveBodyType(responseType: KType): KType? {
+    val responseClass = responseType.classifier as? KClass<*> ?: return null
+    val typeParams = responseClass.typeParameters
+    val typeArgs = responseType.arguments
     val constructor = responseClass.primaryConstructor ?: return null
     for (param in constructor.parameters) {
-        val paramType = param.type
-        val classifier = paramType.classifier as? KClass<*> ?: continue
+        val classifier = param.type.classifier as? KClass<*> ?: continue
         if (classifier.isSubclassOf(ResponseBody::class)) {
-            val rawType = paramType.arguments.firstOrNull()?.type ?: return null
-            return typeParamMap[rawType] ?: rawType
+            val bodyTypeArg = param.type.arguments.firstOrNull()?.type ?: return null
+            val paramIndex = typeParams.indexOfFirst { it.createType() == bodyTypeArg }
+            if (paramIndex >= 0) {
+                return typeArgs.getOrNull(paramIndex)?.type
+            }
+            return bodyTypeArg
         }
     }
     return null
