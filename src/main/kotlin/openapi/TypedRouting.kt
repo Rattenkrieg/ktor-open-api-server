@@ -216,6 +216,7 @@ suspend fun sendResponsePayload(
     val statusCode = response.statusCode
     val constructor = kClass.primaryConstructor
     var body: Any? = null
+    var bodyKType: KType? = null
     var hasResponseBody = false
     var hasDataProperties = false
     if (constructor != null) {
@@ -229,6 +230,7 @@ suspend fun sendResponsePayload(
                 classifier.isSubclassOf(ResponseBody::class) -> {
                     hasResponseBody = true
                     body = (value as ResponseBody<*>).value
+                    bodyKType = resolveBodyKType(paramType, responseType, kClass)
                 }
                 classifier == ResponseHeader::class -> {
                     call.response.headers.append(paramName, (value as ResponseHeader).value)
@@ -239,16 +241,9 @@ suspend fun sendResponsePayload(
     }
     when {
         body != null && body != Unit -> {
-            if (body is JsonElement) {
-                call.respond(statusCode, body, TypeInfo(JsonElement::class))
-            } else if (body!!::class.typeParameters.isNotEmpty()) {
-                val bodyType = resolveBodyType(responseType)
-                    ?: resolveBodyType(kClass.createType())
-                if (bodyType != null) {
-                    call.respond(statusCode, body, TypeInfo(body::class, bodyType))
-                } else {
-                    call.respond(statusCode, body)
-                }
+            val kType = bodyKType
+            if (kType != null) {
+                call.respond(statusCode, body!!, TypeInfo(body::class, kType))
             } else {
                 call.respond(statusCode, body)
             }
@@ -259,6 +254,18 @@ suspend fun sendResponsePayload(
         }
         else -> call.respond(statusCode)
     }
+}
+
+private fun resolveBodyKType(
+    responseBodyParamType: KType,
+    responseType: KType,
+    runtimeClass: KClass<*>,
+): KType? {
+    val rawBodyType = responseBodyParamType.arguments.firstOrNull()?.type ?: return null
+    // If the body type is concrete (not a type variable), return it directly
+    if (rawBodyType.classifier is KClass<*>) return rawBodyType
+    // Otherwise resolve from the response type's type arguments
+    return resolveBodyType(responseType) ?: resolveBodyType(runtimeClass.createType())
 }
 
 private fun resolveBodyType(responseType: KType): KType? {

@@ -68,7 +68,8 @@ sealed interface ResponsePayloadItem<out T> {
     val value: T
 }
 
-data class ResponseBody<T : Any>(override val value: T) : ResponsePayloadItem<T>
+@kotlinx.serialization.Serializable
+data class ResponseBody<T : @kotlinx.serialization.Serializable Any>(override val value: T) : ResponsePayloadItem<T>
 data class ResponseHeader(override val value: String) : ResponsePayloadItem<String>
 
 data class Ok<T : Any>(val body: ResponseBody<T>) : OkResponsePayload() {
