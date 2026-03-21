@@ -83,10 +83,10 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedGet(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route {
-    val payloadType = typeOf<P>()
+    val requestType = typeOf<P>()
     val responseType = typeOf<R>()
-    registerRouteSpec(this, HttpMethod.Get, payloadType, responseType)
-    return httpMethod(HttpMethod.Get, payloadType, responseType, handler)
+    registerRouteSpec(this, HttpMethod.Get, requestType, responseType)
+    return httpMethod(HttpMethod.Get, requestType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPost(
@@ -97,10 +97,10 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPost(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route {
-    val payloadType = typeOf<P>()
+    val requestType = typeOf<P>()
     val responseType = typeOf<R>()
-    registerRouteSpec(this, HttpMethod.Post, payloadType, responseType)
-    return httpMethod(HttpMethod.Post, payloadType, responseType, handler)
+    registerRouteSpec(this, HttpMethod.Post, requestType, responseType)
+    return httpMethod(HttpMethod.Post, requestType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPut(
@@ -111,10 +111,10 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPut(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route {
-    val payloadType = typeOf<P>()
+    val requestType = typeOf<P>()
     val responseType = typeOf<R>()
-    registerRouteSpec(this, HttpMethod.Put, payloadType, responseType)
-    return httpMethod(HttpMethod.Put, payloadType, responseType, handler)
+    registerRouteSpec(this, HttpMethod.Put, requestType, responseType)
+    return httpMethod(HttpMethod.Put, requestType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedDelete(
@@ -125,10 +125,10 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedDelete(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route {
-    val payloadType = typeOf<P>()
+    val requestType = typeOf<P>()
     val responseType = typeOf<R>()
-    registerRouteSpec(this, HttpMethod.Delete, payloadType, responseType)
-    return httpMethod(HttpMethod.Delete, payloadType, responseType, handler)
+    registerRouteSpec(this, HttpMethod.Delete, requestType, responseType)
+    return httpMethod(HttpMethod.Delete, requestType, responseType, handler)
 }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
@@ -139,26 +139,26 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route {
-    val payloadType = typeOf<P>()
+    val requestType = typeOf<P>()
     val responseType = typeOf<R>()
-    registerRouteSpec(this, HttpMethod.Patch, payloadType, responseType)
-    return httpMethod(HttpMethod.Patch, payloadType, responseType, handler)
+    registerRouteSpec(this, HttpMethod.Patch, requestType, responseType)
+    return httpMethod(HttpMethod.Patch, requestType, responseType, handler)
 }
 
 fun <P : RequestPayload> Route.httpMethod(
     method: HttpMethod,
-    payloadType: KType,
+    requestType: KType,
     responseType: KType,
     handler: suspend TypedContext<P>.() -> Any
-): Route = method(method) { handle { handleTypedRoute(payloadType, responseType, handler) } }
+): Route = method(method) { handle { handleTypedRoute(requestType, responseType, handler) } }
 
 suspend fun <P : RequestPayload> RoutingContext.handleTypedRoute(
-    payloadType: KType,
+    requestType: KType,
     responseType: KType,
     handler: suspend TypedContext<P>.() -> Any
 ) {
     @Suppress("UNCHECKED_CAST")
-    val payload = extractPayload(call, payloadType) as P
+    val payload = extractPayload(call, requestType) as P
     val ctx = TypedContext(payload, call)
     val response = try {
         ctx.handler()
@@ -286,20 +286,20 @@ private fun resolveBodyType(
 fun registerRouteSpec(
     route: Route,
     method: HttpMethod,
-    payloadType: KType,
+    requestType: KType,
     responseType: KType
 ) {
     val path = route.fullPath()
     val spec = route.application.attributes.getOrNull(OpenApiSpecKey) ?: return
     try {
-        addRouteToSpec(spec, path, method, payloadType, responseType)
+        addRouteToSpec(spec, path, method, requestType, responseType)
     } catch (e: Exception) {
         route.application.log.warn("Failed to register OpenAPI spec for $method $path: ${e.message}")
     }
 }
 
-suspend fun extractPayload(call: RoutingCall, payloadType: KType): Any {
-    val kClass = payloadType.classifier as KClass<*>
+suspend fun extractPayload(call: RoutingCall, requestType: KType): Any {
+    val kClass = requestType.classifier as KClass<*>
     val constructor = kClass.primaryConstructor
         ?: error("Payload ${kClass.simpleName} must have a primary constructor")
     val args = constructor.parameters.associateWith { param ->
