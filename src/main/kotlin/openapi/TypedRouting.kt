@@ -282,7 +282,7 @@ class RequestPlan private constructor(
 
 sealed interface ResponsePlan {
     object Stream : ResponsePlan
-    data class StatusOnly(val statusCode: HttpStatusCode) : ResponsePlan
+    object StatusOnly : ResponsePlan
 
     data class Sealed(
         val variantPlans: Map<KClass<*>, ResponsePlan>,
@@ -303,20 +303,28 @@ sealed interface ResponsePlan {
     companion object {
         fun build(responseType: KType, json: Json): ResponsePlan {
             val responseClass = responseType.classifier as KClass<*>
-            if (responseClass.isSubclassOf(StreamResponsePayload::class)) return Stream
-            if (responseClass.isSealed) {
-                val variantPlans = responseClass.sealedSubclasses.associateWith { subclass ->
-                    if (subclass.isSubclassOf(StreamResponsePayload::class)) Stream
-                    else buildFromConstructor(subclass, null, json)
-                }
-                return Sealed(variantPlans)
-            }
-            return buildFromConstructor(responseClass, responseType, json)
+            return buildForClassOrType(responseClass, responseType, json, depth = 0)
         }
 
         fun buildForClass(kClass: KClass<*>, json: Json): ResponsePlan {
+            return buildForClassOrType(kClass, null, json, depth = 0)
+        }
+
+        private fun buildForClassOrType(
+            kClass: KClass<*>,
+            responseType: KType?,
+            json: Json,
+            depth: Int,
+        ): ResponsePlan {
+            check(depth < 4) { "Sealed response nesting too deep for ${kClass.simpleName}" }
             if (kClass.isSubclassOf(StreamResponsePayload::class)) return Stream
-            return buildFromConstructor(kClass, null, json)
+            if (kClass.isSealed) {
+                val variantPlans = kClass.sealedSubclasses.associateWith { subclass ->
+                    buildForClassOrType(subclass, null, json, depth + 1)
+                }
+                return Sealed(variantPlans)
+            }
+            return buildFromConstructor(kClass, responseType, json)
         }
 
         @Suppress("UNCHECKED_CAST")
@@ -326,7 +334,7 @@ sealed interface ResponsePlan {
             json: Json,
         ): ResponsePlan {
             val constructor = kClass.primaryConstructor
-                ?: return StatusOnly(resolveResponsePayloadStatusCode(kClass))
+                ?: return StatusOnly
             val properties = kClass.memberProperties.associateBy { it.name }
             var hasResponseBody = false
             var hasDataProperties = false
@@ -366,7 +374,7 @@ sealed interface ResponsePlan {
                 val serializer = json.serializersModule.serializer(type) as KSerializer<Any>
                 return DirectPayload(json, serializer)
             }
-            return StatusOnly(resolveResponsePayloadStatusCode(kClass))
+            return StatusOnly
         }
 
         private fun resolveBodyKType(responseBodyParamType: KType, responseType: KType): KType? {
