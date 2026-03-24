@@ -15,6 +15,9 @@ import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.typeOf
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.serializer
 
 class AlternateResponseException(val response: ResponsePayload) : Exception()
 
@@ -130,11 +133,9 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.regis
 ): Route {
     val requestType = typeOf<P>()
     val responseType = typeOf<R>()
-    // why cant we do it here?
-//    val s = json.serializersModule.serializer<R>()
-    // and use resolved serializer to write response
+    val json = application.attributes.getOrNull(OpenApiJsonKey) ?: Json.Default
     registerRouteSpec(this, method, requestType, responseType)
-    val responseStrategy = ResponseStrategy.build(responseType)
+    val responseStrategy = ResponseStrategy.build(responseType, json)
     return method(method) {
         handle { handleTypedRoute(requestType, responseStrategy, handler) }
     }
@@ -144,7 +145,8 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.regis
 
 sealed interface ResponseStrategy {
     data class WithBody(
-        val bodyKType: KType?,
+        val json: Json,
+        val bodySerializer: KSerializer<Any>?,
         val headerNames: List<String>,
         val statusCode: HttpStatusCode,
     ) : ResponseStrategy
@@ -158,12 +160,12 @@ sealed interface ResponseStrategy {
     ) : ResponseStrategy
 
     object Stream : ResponseStrategy
-    object Sealed : ResponseStrategy
+    data class Sealed(val json: Json) : ResponseStrategy
 
     companion object {
-        fun buildForClass(kClass: KClass<*>): ResponseStrategy {
+        fun buildForClass(kClass: KClass<*>, json: Json = Json.Default): ResponseStrategy {
             if (kClass.isSubclassOf(StreamResponsePayload::class)) return Stream
-            if (kClass.isSealed) return Sealed
+            if (kClass.isSealed) return Sealed(json)
             val constructor = kClass.primaryConstructor ?: return StatusOnly(
                 resolveResponsePayloadStatusCode(kClass),
             )
@@ -187,7 +189,11 @@ sealed interface ResponseStrategy {
                 }
             }
             if (hasResponseBody) {
-                return WithBody(bodyKType, headerNames, resolveResponsePayloadStatusCode(kClass))
+                @Suppress("UNCHECKED_CAST")
+                val bodySerializer = bodyKType?.let {
+                    json.serializersModule.serializer(it) as KSerializer<Any>
+                }
+                return WithBody(json, bodySerializer, headerNames, resolveResponsePayloadStatusCode(kClass))
             }
             if (hasDataProperties) {
                 return DirectPayload(kClass.supertypes.first())
@@ -195,10 +201,10 @@ sealed interface ResponseStrategy {
             return StatusOnly(resolveResponsePayloadStatusCode(kClass))
         }
 
-        fun build(responseType: KType): ResponseStrategy {
+        fun build(responseType: KType, json: Json = Json.Default): ResponseStrategy {
             val responseClass = responseType.classifier as KClass<*>
             if (responseClass.isSubclassOf(StreamResponsePayload::class)) return Stream
-            if (responseClass.isSealed) return Sealed
+            if (responseClass.isSealed) return Sealed(json)
             val constructor = responseClass.primaryConstructor ?: return StatusOnly(HttpStatusCode.OK)
             var bodyKType: KType? = null
             var hasResponseBody = false
@@ -217,8 +223,13 @@ sealed interface ResponseStrategy {
                 }
             }
             if (hasResponseBody) {
+                @Suppress("UNCHECKED_CAST")
+                val bodySerializer = bodyKType?.let {
+                    json.serializersModule.serializer(it) as KSerializer<Any>
+                }
                 return WithBody(
-                    bodyKType = bodyKType,
+                    json = json,
+                    bodySerializer = bodySerializer,
                     headerNames = headerNames,
                     statusCode = resolveResponsePayloadStatusCode(responseClass),
                 )
@@ -274,11 +285,16 @@ suspend fun <P : RequestPayload> RoutingContext.handleTypedRoute(
     sendResponse(call, response as ResponsePayload, strategy)
 }
 
+private val strategyCache = java.util.concurrent.ConcurrentHashMap<KClass<*>, ResponseStrategy>()
+
 suspend fun sendResponsePayload(
     call: ApplicationCall,
     response: ResponsePayload,
 ) {
-    val strategy = ResponseStrategy.buildForClass(response::class)
+    val json = call.application.attributes.getOrNull(OpenApiJsonKey) ?: Json.Default
+    val strategy = strategyCache.getOrPut(response::class) {
+        ResponseStrategy.buildForClass(response::class, json)
+    }
     sendResponse(call, response, strategy)
 }
 
@@ -326,7 +342,7 @@ suspend fun sendResponse(
             call.respond(response.statusCode, response, TypeInfo(response::class, strategy.responseType))
         }
         is ResponseStrategy.Sealed -> {
-            val runtimeStrategy = ResponseStrategy.buildForClass(response::class)
+            val runtimeStrategy = ResponseStrategy.buildForClass(response::class, strategy.json)
             sendResponse(call, response, runtimeStrategy)
         }
     }
@@ -341,7 +357,7 @@ private suspend fun sendBodyResponse(
     val statusCode = response.statusCode
     val constructor = kClass.primaryConstructor ?: return call.respond(statusCode)
     var body: Any? = null
-    var bodyKType: KType? = strategy.bodyKType
+    var bodySerializer = strategy.bodySerializer
     for (param in constructor.parameters) {
         val paramName = param.name ?: continue
         val classifier = param.type.classifier as? KClass<*> ?: continue
@@ -350,9 +366,9 @@ private suspend fun sendBodyResponse(
         when {
             classifier.isSubclassOf(ResponseBody::class) -> {
                 body = (value as ResponseBody<*>).value
-                if (bodyKType == null) {
-                    val runtimeStrategy = ResponseStrategy.buildForClass(kClass)
-                    bodyKType = (runtimeStrategy as? ResponseStrategy.WithBody)?.bodyKType
+                if (bodySerializer == null) {
+                    val runtimeStrategy = ResponseStrategy.buildForClass(kClass, strategy.json)
+                    bodySerializer = (runtimeStrategy as? ResponseStrategy.WithBody)?.bodySerializer
                 }
             }
             classifier == ResponseHeader::class -> {
@@ -362,8 +378,13 @@ private suspend fun sendBodyResponse(
     }
     when {
         body != null && body != Unit -> {
-            if (bodyKType != null) {
-                call.respond(statusCode, body, TypeInfo(body::class, bodyKType))
+            val serializer = bodySerializer
+            if (serializer != null) {
+                call.response.status(statusCode)
+                call.respondText(
+                    strategy.json.encodeToString(serializer, body!!),
+                    ContentType.Application.Json,
+                )
             } else {
                 call.respond(statusCode, body)
             }

@@ -29,9 +29,11 @@ import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.full.primaryConstructor
 
 val OpenApiSpecKey = AttributeKey<OpenApiSpec>("OpenApiSpec")
+val OpenApiJsonKey = AttributeKey<Json>("OpenApiJson")
 
 class OpenApiConfig {
     lateinit var spec: OpenApiSpec
+    var json: Json = Json.Default
     var specPath: String? = "/openapi.json"
     var customTypes: Map<KType, JsonSchema> = mapOf()
 }
@@ -41,6 +43,7 @@ val OpenApi = createApplicationPlugin("OpenApi", ::OpenApiConfig) {
         pluginConfig.spec.components.schemas[type.slug()] = schema
     }
     application.attributes.put(OpenApiSpecKey, pluginConfig.spec)
+    application.attributes.put(OpenApiJsonKey, pluginConfig.json)
     val specPath = pluginConfig.specPath ?: return@createApplicationPlugin
     val specJson = lazy {
         val json = Json {
