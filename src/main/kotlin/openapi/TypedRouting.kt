@@ -22,18 +22,12 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
 
-class AlternateResponseException(val response: ResponsePayload) : Exception()
-
 class TypedContext<P : RequestPayload>(
     val payload: P,
     private val _call: RoutingCall
 ) {
     @RawCallAccess
     val call: RoutingCall get() = _call
-
-    fun respondWith(response: ResponsePayload): Nothing {
-        throw AlternateResponseException(response)
-    }
 }
 
 // --- Route DSL aliases ---
@@ -115,7 +109,6 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
     path: String, noinline handler: suspend TypedContext<P>.() -> R
 ): Route = route(path) { typedPatch<P, R>(handler) }
-
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
     noinline handler: suspend TypedContext<P>.() -> R
@@ -290,7 +283,10 @@ class RequestPlan private constructor(
 sealed interface ResponsePlan {
     object Stream : ResponsePlan
     data class StatusOnly(val statusCode: HttpStatusCode) : ResponsePlan
-    data class Sealed(val json: Json) : ResponsePlan
+
+    data class Sealed(
+        val variantPlans: Map<KClass<*>, ResponsePlan>,
+    ) : ResponsePlan
 
     data class WithBody(
         val json: Json,
@@ -305,21 +301,22 @@ sealed interface ResponsePlan {
     ) : ResponsePlan
 
     companion object {
-        private val cache = java.util.concurrent.ConcurrentHashMap<Pair<KClass<*>, Json>, ResponsePlan>()
-
         fun build(responseType: KType, json: Json): ResponsePlan {
             val responseClass = responseType.classifier as KClass<*>
             if (responseClass.isSubclassOf(StreamResponsePayload::class)) return Stream
-            if (responseClass.isSealed) return Sealed(json)
+            if (responseClass.isSealed) {
+                val variantPlans = responseClass.sealedSubclasses.associateWith { subclass ->
+                    if (subclass.isSubclassOf(StreamResponsePayload::class)) Stream
+                    else buildFromConstructor(subclass, null, json)
+                }
+                return Sealed(variantPlans)
+            }
             return buildFromConstructor(responseClass, responseType, json)
         }
 
         fun buildForClass(kClass: KClass<*>, json: Json): ResponsePlan {
-            return cache.getOrPut(kClass to json) {
-                if (kClass.isSubclassOf(StreamResponsePayload::class)) return@getOrPut Stream
-                if (kClass.isSealed) return@getOrPut Sealed(json)
-                buildFromConstructor(kClass, null, json)
-            }
+            if (kClass.isSubclassOf(StreamResponsePayload::class)) return Stream
+            return buildFromConstructor(kClass, null, json)
         }
 
         @Suppress("UNCHECKED_CAST")
@@ -403,12 +400,8 @@ suspend fun <P : RequestPayload> RoutingContext.handleTypedRoute(
     @Suppress("UNCHECKED_CAST")
     val payload = requestPlan.extract(call) as P
     val ctx = TypedContext(payload, call)
-    val response = try {
-        ctx.handler()
-    } catch (e: AlternateResponseException) {
-        e.response
-    }
-    sendResponse(call, response as ResponsePayload, responsePlan)
+    val response = ctx.handler() as ResponsePayload
+    sendResponse(call, response, responsePlan)
 }
 
 suspend fun sendResponsePayload(
@@ -445,41 +438,49 @@ suspend fun sendResponse(
         is ResponsePlan.Stream -> call.respond(response.statusCode)
         is ResponsePlan.StatusOnly -> call.respond(response.statusCode)
         is ResponsePlan.Sealed -> {
-            val runtimePlan = ResponsePlan.buildForClass(response::class, plan.json)
-            sendResponse(call, response, runtimePlan)
+            val variantPlan = plan.variantPlans[response::class]
+                ?: ResponsePlan.buildForClass(response::class,
+                    (plan.variantPlans.values.firstOrNull() as? ResponsePlan.WithBody)?.json ?: Json.Default)
+            sendResponse(call, response, variantPlan)
         }
-        is ResponsePlan.WithBody -> {
-            for ((name, prop) in plan.headerProperties) {
-                (prop.get(response) as? ResponseHeader)?.let {
-                    call.response.headers.append(name, it.value)
-                }
-            }
-            val bodyWrapper = plan.bodyProperty?.get(response) as? ResponseBody<*>
-            val body = bodyWrapper?.value
-            when {
-                body != null && body != Unit -> {
-                    var serializer = plan.bodySerializer
-                    if (serializer == null) {
-                        val runtimePlan = ResponsePlan.buildForClass(response::class, plan.json)
-                        serializer = (runtimePlan as? ResponsePlan.WithBody)?.bodySerializer
-                    }
-                    if (serializer != null) {
-                        call.response.status(response.statusCode)
-                        call.respondText(plan.json.encodeToString(serializer, body), ContentType.Application.Json)
-                    } else {
-                        error(
-                            "No serializer resolved for response body of type ${body::class.simpleName} " +
-                                "in ${response::class.simpleName}. Ensure ResponseBody<T> uses a @Serializable type."
-                        )
-                    }
-                }
-                else -> call.respond(response.statusCode)
-            }
-        }
+        is ResponsePlan.WithBody -> sendBodyResponse(call, response, plan)
         is ResponsePlan.DirectPayload -> {
             call.response.status(response.statusCode)
             call.respondText(plan.json.encodeToString(plan.serializer, response), ContentType.Application.Json)
         }
+    }
+}
+
+private suspend fun sendBodyResponse(
+    call: ApplicationCall,
+    response: ResponsePayload,
+    plan: ResponsePlan.WithBody,
+) {
+    for ((name, prop) in plan.headerProperties) {
+        (prop.get(response) as? ResponseHeader)?.let {
+            call.response.headers.append(name, it.value)
+        }
+    }
+    val bodyWrapper = plan.bodyProperty?.get(response) as? ResponseBody<*>
+    val body = bodyWrapper?.value
+    when {
+        body != null && body != Unit -> {
+            var serializer = plan.bodySerializer
+            if (serializer == null) {
+                val runtimePlan = ResponsePlan.buildForClass(response::class, plan.json)
+                serializer = (runtimePlan as? ResponsePlan.WithBody)?.bodySerializer
+            }
+            if (serializer != null) {
+                call.response.status(response.statusCode)
+                call.respondText(plan.json.encodeToString(serializer, body), ContentType.Application.Json)
+            } else {
+                error(
+                    "No serializer resolved for response body of type ${body::class.simpleName} " +
+                        "in ${response::class.simpleName}. Ensure ResponseBody<T> uses a @Serializable type."
+                )
+            }
+        }
+        else -> call.respond(response.statusCode)
     }
 }
 

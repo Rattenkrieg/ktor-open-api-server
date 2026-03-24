@@ -114,6 +114,14 @@ data class PageResult<T>(val data: List<T>, val nextPage: String?)
 @Serializable
 data class ErrorDetail(val code: String, val message: String)
 
+sealed interface ItemResult : ResponsePayload {
+    class Csv(
+        contentType: ContentType,
+        writer: suspend java.io.Writer.() -> Unit,
+    ) : TextStreamResponse(contentType, writer = writer), ItemResult
+    class Json(val body: ResponseBody<Map<String, String>>) : OkResponsePayload(), ItemResult
+}
+
 sealed interface ExternalLinkResult : ResponsePayload {
     class Redirect(url: String) : RedirectResponse(url, permanent = false), ExternalLinkResult
     object Missing : NotFoundResponsePayload(), ExternalLinkResult
@@ -622,7 +630,7 @@ class TypedRoutingTest : ShouldSpec({
         }
     }
 
-    should("respondWith returns alternate response type") {
+    should("sealed response returns alternate response type based on accept header") {
         testApplication {
             install(ContentNegotiation) { json() }
             install(OpenApi) {
@@ -630,14 +638,13 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<AcceptPayload, Ok<Map<String, String>>> {
+                    typedGet<AcceptPayload, ItemResult> {
                         val acceptsCsv = payload.accept.value.any { it.value == "text/csv" }
                         if (acceptsCsv) {
-                            respondWith(TextStreamResponse(ContentType.Text.CSV) {
-                                write("csv-data")
-                            })
+                            ItemResult.Csv(ContentType.Text.CSV) { write("csv-data") }
+                        } else {
+                            ItemResult.Json(ResponseBody(mapOf("id" to payload.id.value)))
                         }
-                        Ok(mapOf("id" to payload.id.value))
                     }
                 }
             }
