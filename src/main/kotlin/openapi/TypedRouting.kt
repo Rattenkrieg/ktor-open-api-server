@@ -83,8 +83,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.patch
 // --- Typed route registration ---
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedGet(
-    path: String,
-    noinline handler: suspend TypedContext<P>.() -> R
+    path: String, noinline handler: suspend TypedContext<P>.() -> R
 ): Route = route(path) { typedGet<P, R>(handler) }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedGet(
@@ -92,8 +91,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 ): Route = registerTypedRoute<P, R>(HttpMethod.Get, handler)
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPost(
-    path: String,
-    noinline handler: suspend TypedContext<P>.() -> R
+    path: String, noinline handler: suspend TypedContext<P>.() -> R
 ): Route = route(path) { typedPost<P, R>(handler) }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPost(
@@ -101,8 +99,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 ): Route = registerTypedRoute<P, R>(HttpMethod.Post, handler)
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPut(
-    path: String,
-    noinline handler: suspend TypedContext<P>.() -> R
+    path: String, noinline handler: suspend TypedContext<P>.() -> R
 ): Route = route(path) { typedPut<P, R>(handler) }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPut(
@@ -110,8 +107,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 ): Route = registerTypedRoute<P, R>(HttpMethod.Put, handler)
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedDelete(
-    path: String,
-    noinline handler: suspend TypedContext<P>.() -> R
+    path: String, noinline handler: suspend TypedContext<P>.() -> R
 ): Route = route(path) { typedDelete<P, R>(handler) }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedDelete(
@@ -119,8 +115,7 @@ inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typed
 ): Route = registerTypedRoute<P, R>(HttpMethod.Delete, handler)
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
-    path: String,
-    noinline handler: suspend TypedContext<P>.() -> R
+    path: String, noinline handler: suspend TypedContext<P>.() -> R
 ): Route = route(path) { typedPatch<P, R>(handler) }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
@@ -152,6 +147,7 @@ sealed interface ResponseStrategy {
     ) : ResponseStrategy
 
     data class DirectPayload(
+        val json: Json,
         val responseType: KType,
     ) : ResponseStrategy
 
@@ -160,55 +156,50 @@ sealed interface ResponseStrategy {
     ) : ResponseStrategy
 
     object Stream : ResponseStrategy
+
     data class Sealed(val json: Json) : ResponseStrategy
 
     companion object {
-        fun buildForClass(kClass: KClass<*>, json: Json = Json.Default): ResponseStrategy {
-            if (kClass.isSubclassOf(StreamResponsePayload::class)) return Stream
-            if (kClass.isSealed) return Sealed(json)
-            val constructor = kClass.primaryConstructor ?: return StatusOnly(
-                resolveResponsePayloadStatusCode(kClass),
-            )
-            var hasResponseBody = false
-            var hasDataProperties = false
-            var bodyKType: KType? = null
-            val headerNames = mutableListOf<String>()
-            for (param in constructor.parameters) {
-                val classifier = param.type.classifier as? KClass<*> ?: continue
-                val paramName = param.name ?: continue
-                when {
-                    classifier.isSubclassOf(ResponseBody::class) -> {
-                        hasResponseBody = true
-                        val rawType = param.type.arguments.firstOrNull()?.type
-                        if (rawType != null && rawType.classifier is KClass<*>) {
-                            bodyKType = rawType
-                        }
-                    }
-                    classifier == ResponseHeader::class -> headerNames.add(paramName)
-                    else -> hasDataProperties = true
-                }
-            }
-            if (hasResponseBody) {
-                @Suppress("UNCHECKED_CAST")
-                val bodySerializer = bodyKType?.let {
-                    json.serializersModule.serializer(it) as KSerializer<Any>
-                }
-                return WithBody(json, bodySerializer, headerNames, resolveResponsePayloadStatusCode(kClass))
-            }
-            if (hasDataProperties) {
-                return DirectPayload(kClass.supertypes.first())
-            }
-            return StatusOnly(resolveResponsePayloadStatusCode(kClass))
-        }
+        private val cache = java.util.concurrent.ConcurrentHashMap<Pair<KClass<*>, Json>, ResponseStrategy>()
 
-        fun build(responseType: KType, json: Json = Json.Default): ResponseStrategy {
+        fun build(responseType: KType, json: Json): ResponseStrategy {
             val responseClass = responseType.classifier as KClass<*>
             if (responseClass.isSubclassOf(StreamResponsePayload::class)) return Stream
             if (responseClass.isSealed) return Sealed(json)
-            val constructor = responseClass.primaryConstructor ?: return StatusOnly(HttpStatusCode.OK)
-            var bodyKType: KType? = null
+            return buildFromConstructor(responseClass, json) { paramType ->
+                resolveBodyKType(paramType, responseType)
+            }.withFallback(responseType, json)
+        }
+
+        fun buildForClass(kClass: KClass<*>, json: Json): ResponseStrategy {
+            return cache.getOrPut(kClass to json) {
+                if (kClass.isSubclassOf(StreamResponsePayload::class)) return@getOrPut Stream
+                if (kClass.isSealed) return@getOrPut Sealed(json)
+                buildFromConstructor(kClass, json) { paramType ->
+                    val rawType = paramType.arguments.firstOrNull()?.type
+                    rawType?.takeIf { it.classifier is KClass<*> }
+                }.withFallback(kClass.supertypes.firstOrNull(), json)
+            }
+        }
+
+        private data class BuildResult(
+            val hasResponseBody: Boolean,
+            val hasDataProperties: Boolean,
+            val bodySerializer: KSerializer<Any>?,
+            val headerNames: List<String>,
+            val statusCode: HttpStatusCode,
+        )
+
+        private fun buildFromConstructor(
+            kClass: KClass<*>,
+            json: Json,
+            resolveBody: (KType) -> KType?,
+        ): BuildResult {
+            val constructor = kClass.primaryConstructor
+                ?: return BuildResult(false, false, null, listOf(), resolveResponsePayloadStatusCode(kClass))
             var hasResponseBody = false
             var hasDataProperties = false
+            var bodyKType: KType? = null
             val headerNames = mutableListOf<String>()
             for (param in constructor.parameters) {
                 val classifier = param.type.classifier as? KClass<*> ?: continue
@@ -216,28 +207,30 @@ sealed interface ResponseStrategy {
                 when {
                     classifier.isSubclassOf(ResponseBody::class) -> {
                         hasResponseBody = true
-                        bodyKType = resolveBodyKType(param.type, responseType)
+                        bodyKType = resolveBody(param.type)
                     }
                     classifier == ResponseHeader::class -> headerNames.add(paramName)
                     else -> hasDataProperties = true
                 }
             }
+            @Suppress("UNCHECKED_CAST")
+            val bodySerializer = bodyKType?.let {
+                json.serializersModule.serializer(it) as KSerializer<Any>
+            }
+            return BuildResult(
+                hasResponseBody, hasDataProperties, bodySerializer,
+                headerNames, resolveResponsePayloadStatusCode(kClass),
+            )
+        }
+
+        private fun BuildResult.withFallback(responseType: KType?, json: Json): ResponseStrategy {
             if (hasResponseBody) {
-                @Suppress("UNCHECKED_CAST")
-                val bodySerializer = bodyKType?.let {
-                    json.serializersModule.serializer(it) as KSerializer<Any>
-                }
-                return WithBody(
-                    json = json,
-                    bodySerializer = bodySerializer,
-                    headerNames = headerNames,
-                    statusCode = resolveResponsePayloadStatusCode(responseClass),
-                )
+                return WithBody(json, bodySerializer, headerNames, statusCode)
             }
-            if (hasDataProperties) {
-                return DirectPayload(responseType)
+            if (hasDataProperties && responseType != null) {
+                return DirectPayload(json, responseType)
             }
-            return StatusOnly(resolveResponsePayloadStatusCode(responseClass))
+            return StatusOnly(statusCode)
         }
 
         private fun resolveBodyKType(responseBodyParamType: KType, responseType: KType): KType? {
@@ -285,16 +278,12 @@ suspend fun <P : RequestPayload> RoutingContext.handleTypedRoute(
     sendResponse(call, response as ResponsePayload, strategy)
 }
 
-private val strategyCache = java.util.concurrent.ConcurrentHashMap<KClass<*>, ResponseStrategy>()
-
 suspend fun sendResponsePayload(
     call: ApplicationCall,
     response: ResponsePayload,
 ) {
     val json = call.application.attributes.getOrNull(OpenApiJsonKey) ?: Json.Default
-    val strategy = strategyCache.getOrPut(response::class) {
-        ResponseStrategy.buildForClass(response::class, json)
-    }
+    val strategy = ResponseStrategy.buildForClass(response::class, json)
     sendResponse(call, response, strategy)
 }
 
@@ -305,26 +294,12 @@ suspend fun sendResponse(
 ) {
     when (response) {
         is ByteStreamResponse -> {
-            response.fileName?.let {
-                call.response.header(
-                    HttpHeaders.ContentDisposition,
-                    ContentDisposition.Attachment.withParameter(
-                        ContentDisposition.Parameters.FileName, it
-                    ).toString()
-                )
-            }
+            sendContentDisposition(call, response.fileName)
             call.respondOutputStream(response.contentType, response.statusCode) { response.writer(this) }
             return
         }
         is TextStreamResponse -> {
-            response.fileName?.let {
-                call.response.header(
-                    HttpHeaders.ContentDisposition,
-                    ContentDisposition.Attachment.withParameter(
-                        ContentDisposition.Parameters.FileName, it
-                    ).toString()
-                )
-            }
+            sendContentDisposition(call, response.fileName)
             call.respondTextWriter(response.contentType, response.statusCode) { response.writer(this) }
             return
         }
@@ -332,20 +307,42 @@ suspend fun sendResponse(
             call.respondRedirect(response.url, response.statusCode == HttpStatusCode.MovedPermanently)
             return
         }
-        else -> {}
     }
     when (strategy) {
         is ResponseStrategy.Stream -> call.respond(response.statusCode)
         is ResponseStrategy.StatusOnly -> call.respond(response.statusCode)
         is ResponseStrategy.WithBody -> sendBodyResponse(call, response, strategy)
-        is ResponseStrategy.DirectPayload -> {
-            call.respond(response.statusCode, response, TypeInfo(response::class, strategy.responseType))
-        }
+        is ResponseStrategy.DirectPayload -> sendDirectPayloadResponse(call, response, strategy)
         is ResponseStrategy.Sealed -> {
             val runtimeStrategy = ResponseStrategy.buildForClass(response::class, strategy.json)
             sendResponse(call, response, runtimeStrategy)
         }
     }
+}
+
+private fun sendContentDisposition(call: ApplicationCall, fileName: String?) {
+    fileName?.let {
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment.withParameter(
+                ContentDisposition.Parameters.FileName, it
+            ).toString()
+        )
+    }
+}
+
+private suspend fun sendDirectPayloadResponse(
+    call: ApplicationCall,
+    response: ResponsePayload,
+    strategy: ResponseStrategy.DirectPayload,
+) {
+    @Suppress("UNCHECKED_CAST")
+    val serializer = strategy.json.serializersModule.serializer(strategy.responseType) as KSerializer<Any>
+    call.response.status(response.statusCode)
+    call.respondText(
+        strategy.json.encodeToString(serializer, response),
+        ContentType.Application.Json,
+    )
 }
 
 private suspend fun sendBodyResponse(
@@ -354,8 +351,7 @@ private suspend fun sendBodyResponse(
     strategy: ResponseStrategy.WithBody,
 ) {
     val kClass = response::class
-    val statusCode = response.statusCode
-    val constructor = kClass.primaryConstructor ?: return call.respond(statusCode)
+    val constructor = kClass.primaryConstructor ?: return call.respond(response.statusCode)
     var body: Any? = null
     var bodySerializer = strategy.bodySerializer
     for (param in constructor.parameters) {
@@ -380,16 +376,17 @@ private suspend fun sendBodyResponse(
         body != null && body != Unit -> {
             val serializer = bodySerializer
             if (serializer != null) {
-                call.response.status(statusCode)
+                call.response.status(response.statusCode)
                 call.respondText(
                     strategy.json.encodeToString(serializer, body!!),
                     ContentType.Application.Json,
                 )
             } else {
-                call.respond(statusCode, body)
+                error("No serializer resolved for response body of type ${body!!::class.simpleName} " +
+                    "in ${kClass.simpleName}. Ensure ResponseBody<T> uses a @Serializable type.")
             }
         }
-        else -> call.respond(statusCode)
+        else -> call.respond(response.statusCode)
     }
 }
 
@@ -463,18 +460,10 @@ suspend fun extractPayload(call: RoutingCall, requestType: KType): Any {
                         ?: error("Missing header: $httpName"))
                 }
             }
-            classifier == AcceptHeader::class -> {
-                AcceptHeader(call.request.acceptItems())
-            }
-            classifier == QueryParams::class -> {
-                QueryParams(call.queryParameters.entries().associate { it.key to it.value })
-            }
-            classifier == MultipartBody::class -> {
-                MultipartBody(call.receiveMultipart())
-            }
-            classifier == RequestOrigin::class -> {
-                RequestOrigin(call.request.local)
-            }
+            classifier == AcceptHeader::class -> AcceptHeader(call.request.acceptItems())
+            classifier == QueryParams::class -> QueryParams(call.queryParameters.entries().associate { it.key to it.value })
+            classifier == MultipartBody::class -> MultipartBody(call.receiveMultipart())
+            classifier == RequestOrigin::class -> RequestOrigin(call.request.local)
             classifier == CookieParam::class -> {
                 val httpName = param.findAnnotation<Name>()?.value ?: paramName
                 if (paramType.isMarkedNullable) {
@@ -495,7 +484,9 @@ suspend fun extractPayload(call: RoutingCall, requestType: KType): Any {
                         ?: error("No authenticated principal of type ${principalClass.simpleName}"))
                 }
             }
-            else -> error("Payload property '$paramName' must be a RequestPayloadItem type (Body, PathParam, QueryParam, QueryParamList, HeaderParam, CookieParam, Principal, AcceptHeader, MultipartBody, RequestOrigin), got: ${classifier.simpleName}")
+            else -> error("Payload property '$paramName' must be a RequestPayloadItem type " +
+                "(Body, PathParam, QueryParam, QueryParamList, HeaderParam, CookieParam, Principal, " +
+                "AcceptHeader, MultipartBody, RequestOrigin), got: ${classifier.simpleName}")
         }
     }
     return constructor.callBy(args)
