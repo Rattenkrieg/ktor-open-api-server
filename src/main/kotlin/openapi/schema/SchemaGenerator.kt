@@ -55,12 +55,17 @@ object SchemaGenerator {
         clazz: KClass<*>,
         type: KType,
         cache: MutableMap<String, JsonSchema>,
-    ): JsonSchema = when {
-        clazz.isSubclassOf(Enum::class) -> handleEnum(type, clazz, cache)
-        clazz.isSubclassOf(Collection::class) -> handleCollection(type, cache)
-        clazz.isSubclassOf(Map::class) -> handleMap(type, cache)
-        clazz.isSealed -> handleSealed(type, clazz, cache)
-        else -> handleObject(type, clazz, cache)
+    ): JsonSchema = try {
+        when {
+            clazz.isSubclassOf(Enum::class) -> handleEnum(type, clazz, cache)
+            clazz.isSubclassOf(Collection::class) -> handleCollection(type, cache)
+            clazz.isSubclassOf(Map::class) -> handleMap(type, cache)
+            clazz.isSealed -> handleSealed(type, clazz, cache)
+            clazz.primaryConstructor == null -> TypeDefinition(type = "object")
+            else -> handleObject(type, clazz, cache)
+        }
+    } catch (_: Exception) {
+        TypeDefinition(type = "object")
     }
 
     private fun handleEnum(type: KType, clazz: KClass<*>, cache: MutableMap<String, JsonSchema>): JsonSchema {

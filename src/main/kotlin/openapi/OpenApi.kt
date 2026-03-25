@@ -85,10 +85,10 @@ fun addRouteToSpec(
 ) {
     val cache = spec.components.schemas
     val payloadClass = payloadType.classifier as KClass<*>
-    val constructor = payloadClass.primaryConstructor ?: return
+    val constructor = payloadClass.primaryConstructor
     val parameters = mutableListOf<Parameter>()
     var requestBody: Request? = null
-    for (param in constructor.parameters) {
+    for (param in (constructor?.parameters ?: listOf())) {
         val paramType = param.type
         val classifier = paramType.classifier as KClass<*>
         val paramName = param.name ?: continue
