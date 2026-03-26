@@ -147,6 +147,14 @@ sealed interface SimpleResult : ResponsePayload {
     }
 }
 
+sealed interface DirectDataResult : ResponsePayload {
+    @kotlinx.serialization.Serializable
+    data class Json(val items: List<String>, val nextPage: String?) : OkResponsePayload(), DirectDataResult
+    class Csv(
+        writer: suspend java.io.Writer.() -> Unit,
+    ) : TextStreamResponse(ContentType.Text.CSV, writer = writer), DirectDataResult
+}
+
 class TypedRoutingTest : ShouldSpec({
 
     fun openApiSpec() = OpenApiSpec(info = Info(title = "Test API", version = "1.0.0"))
@@ -659,6 +667,38 @@ class TypedRoutingTest : ShouldSpec({
             }
             jsonResponse.status shouldBe HttpStatusCode.OK
             jsonResponse.bodyAsText() shouldContain "42"
+        }
+    }
+
+    should("sealed response with direct data properties (no ResponseBody wrapper)") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/data/{id}") {
+                    typedGet<AcceptPayload, DirectDataResult> {
+                        val acceptsCsv = payload.accept.value.any { it.value == "text/csv" }
+                        if (acceptsCsv) {
+                            DirectDataResult.Csv { write("a,b,c") }
+                        } else {
+                            DirectDataResult.Json(listOf("one", "two"), "next-token")
+                        }
+                    }
+                }
+            }
+            val csvResponse = client.get("/data/1") {
+                accept(ContentType.Text.CSV)
+            }
+            csvResponse.status shouldBe HttpStatusCode.OK
+            csvResponse.bodyAsText() shouldBe "a,b,c"
+            val jsonResponse = client.get("/data/1") {
+                accept(ContentType.Application.Json)
+            }
+            jsonResponse.status shouldBe HttpStatusCode.OK
+            jsonResponse.bodyAsText() shouldContain "one"
+            jsonResponse.bodyAsText() shouldContain "next-token"
         }
     }
 
