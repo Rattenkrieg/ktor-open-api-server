@@ -14,6 +14,7 @@ data class Path(
 
 @Serializable
 data class PathOperation(
+    var tags: List<String>? = null,
     var summary: String? = null,
     var description: String? = null,
     var operationId: String? = null,

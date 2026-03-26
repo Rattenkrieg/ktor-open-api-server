@@ -30,12 +30,14 @@ import kotlin.reflect.full.primaryConstructor
 
 val OpenApiSpecKey = AttributeKey<OpenApiSpec>("OpenApiSpec")
 val OpenApiJsonKey = AttributeKey<Json>("OpenApiJson")
+val OpenApiGlobalTagsKey = AttributeKey<List<String>>("OpenApiGlobalTags")
 
 class OpenApiConfig {
     lateinit var spec: OpenApiSpec
     var json: Json = Json.Default
     var specPath: String? = "/openapi.json"
     var customTypes: Map<KType, JsonSchema> = mapOf()
+    var tags: List<String> = listOf()
 }
 
 val OpenApi = createApplicationPlugin("OpenApi", ::OpenApiConfig) {
@@ -44,6 +46,9 @@ val OpenApi = createApplicationPlugin("OpenApi", ::OpenApiConfig) {
     }
     application.attributes.put(OpenApiSpecKey, pluginConfig.spec)
     application.attributes.put(OpenApiJsonKey, pluginConfig.json)
+    if (pluginConfig.tags.isNotEmpty()) {
+        application.attributes.put(OpenApiGlobalTagsKey, pluginConfig.tags)
+    }
     val specPath = pluginConfig.specPath ?: return@createApplicationPlugin
     val specJson = lazy {
         val json = Json {
@@ -81,7 +86,8 @@ fun addRouteToSpec(
     path: String,
     method: HttpMethod,
     payloadType: KType,
-    responseType: KType
+    responseType: KType,
+    tags: List<String>? = null,
 ) {
     val cache = spec.components.schemas
     val payloadClass = payloadType.classifier as KClass<*>
@@ -162,9 +168,10 @@ fun addRouteToSpec(
     }
     val responses = buildResponsePayloadSpec(responseType, cache)
     val operation = PathOperation(
+        tags = tags,
         parameters = parameters.ifEmpty { null },
         requestBody = requestBody,
-        responses = responses
+        responses = responses,
     )
     val pathItem = spec.paths.getOrPut(path) { Path() }
     when (method) {

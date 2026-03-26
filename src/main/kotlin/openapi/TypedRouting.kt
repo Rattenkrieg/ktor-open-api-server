@@ -7,6 +7,7 @@ import io.ktor.server.auth.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.util.*
 import io.ktor.util.reflect.*
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
@@ -504,6 +505,27 @@ private fun sendContentDisposition(call: ApplicationCall, fileName: String?) {
     }
 }
 
+// --- OpenAPI tags ---
+
+val OpenApiTagsKey = AttributeKey<List<String>>("OpenApiTags")
+
+fun Route.tagged(vararg tags: String, build: Route.() -> Unit): Route {
+    attributes.put(OpenApiTagsKey, tags.toList())
+    build()
+    return this
+}
+
+private fun Route.collectTags(): List<String>? {
+    val tags = mutableListOf<String>()
+    application.attributes.getOrNull(OpenApiGlobalTagsKey)?.let { tags.addAll(it) }
+    var current: Route? = this
+    while (current != null) {
+        current.attributes.getOrNull(OpenApiTagsKey)?.let { tags.addAll(it) }
+        current = current.parent
+    }
+    return tags.ifEmpty { null }
+}
+
 // --- OpenAPI spec registration ---
 
 fun registerRouteSpec(
@@ -514,8 +536,9 @@ fun registerRouteSpec(
 ) {
     val path = route.fullPath()
     val spec = route.application.attributes.getOrNull(OpenApiSpecKey) ?: return
+    val tags = route.collectTags()
     try {
-        addRouteToSpec(spec, path, method, requestType, responseType)
+        addRouteToSpec(spec, path, method, requestType, responseType, tags)
     } catch (e: Exception) {
         route.application.log.warn("Failed to register OpenAPI spec for $method $path: ${e.message}")
     }
