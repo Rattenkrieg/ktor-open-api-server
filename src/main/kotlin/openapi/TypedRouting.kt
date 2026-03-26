@@ -13,6 +13,7 @@ import kotlin.reflect.KFunction
 import kotlin.reflect.KParameter
 import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
+import kotlin.reflect.full.createType
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.full.memberProperties
@@ -370,7 +371,7 @@ sealed interface ResponsePlan {
                 return WithBody(json, bodySerializer, bodyProperty, headerProperties)
             }
             if (hasDataProperties) {
-                val type = responseType ?: kClass.supertypes.first()
+                val type = responseType ?: kClass.createType()
                 val serializer = json.serializersModule.serializer(type) as KSerializer<Any>
                 return DirectPayload(json, serializer)
             }
