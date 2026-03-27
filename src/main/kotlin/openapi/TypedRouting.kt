@@ -235,6 +235,21 @@ class RequestPlan private constructor(
                 }
                 param to extractor
             }
+            val bodyCount = extractors.count { it.second is BodyExtractor }
+            check(bodyCount <= 1) {
+                "Payload ${kClass.simpleName} has $bodyCount Body fields, at most 1 is allowed"
+            }
+            val principalCount = extractors.count { it.second is PrincipalExtractor }
+            check(principalCount <= 1) {
+                "Payload ${kClass.simpleName} has $principalCount Principal fields, at most 1 is allowed"
+            }
+            val pathParamNames = extractors
+                .filter { it.second is PathParamExtractor }
+                .map { it.first.name }
+            val duplicatePathParams = pathParamNames.groupBy { it }.filter { it.value.size > 1 }.keys
+            check(duplicatePathParams.isEmpty()) {
+                "Payload ${kClass.simpleName} has duplicate PathParam names: $duplicatePathParams"
+            }
             return RequestPlan(null, constructor, extractors)
         }
     }

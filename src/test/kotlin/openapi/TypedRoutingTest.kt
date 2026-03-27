@@ -6,6 +6,7 @@ import io.kotest.core.spec.style.ShouldSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -97,6 +98,21 @@ data class RenamedHeaderPayload(
 data class NullableBodyPayload(
     val id: PathParam,
     val body: Body<UserData>?,
+) : RequestPayload
+
+data class DuplicateBodyPayload(
+    val body1: Body<UserData>,
+    val body2: Body<UserData>,
+) : RequestPayload
+
+data class DuplicatePrincipalPayload(
+    val auth1: Principal<String>,
+    val auth2: Principal<String>,
+) : RequestPayload
+
+data class DuplicatePathParamPayload(
+    val id: PathParam,
+    val id2: PathParam,
 ) : RequestPayload
 
 data class CookiePayload(
@@ -1335,6 +1351,36 @@ class TypedRoutingTest : ShouldSpec({
             publicOp.shouldNotBeNull()
             publicOp["security"] shouldBe null
         }
+    }
+
+    should("reject payload with duplicate Body fields at route setup") {
+        val exception = shouldThrow<IllegalStateException> {
+            testApplication {
+                install(ContentNegotiation) { json() }
+                install(OpenApi) { spec = openApiSpec() }
+                routing {
+                    route("/test") {
+                        post<DuplicateBodyPayload, Ok<Unit>> { Ok(Unit) }
+                    }
+                }
+            }
+        }
+        exception.message shouldContain "has 2 Body fields"
+    }
+
+    should("reject payload with duplicate Principal fields at route setup") {
+        val exception = shouldThrow<IllegalStateException> {
+            testApplication {
+                install(ContentNegotiation) { json() }
+                install(OpenApi) { spec = openApiSpec() }
+                routing {
+                    route("/test") {
+                        get<DuplicatePrincipalPayload, Ok<Unit>> { Ok(Unit) }
+                    }
+                }
+            }
+        }
+        exception.message shouldContain "has 2 Principal fields"
     }
 
     should("serialize direct @Serializable response payload with data properties") {
