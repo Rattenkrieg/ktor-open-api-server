@@ -88,6 +88,7 @@ fun addRouteToSpec(
     payloadType: KType,
     responseType: KType,
     tags: List<String>? = null,
+    security: List<Map<String, List<String>>>? = null,
 ) {
     val cache = spec.components.schemas
     val payloadClass = payloadType.classifier as KClass<*>
@@ -172,6 +173,7 @@ fun addRouteToSpec(
         parameters = parameters.ifEmpty { null },
         requestBody = requestBody,
         responses = responses,
+        security = security,
     )
     val pathItem = spec.paths.getOrPut(path) { Path() }
     when (method) {

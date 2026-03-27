@@ -3,6 +3,8 @@ package openapi
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.server.application.*
+import io.ktor.server.auth.AuthenticationRouteSelector
+import io.ktor.server.routing.RoutingNode
 import io.ktor.server.auth.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -32,87 +34,45 @@ class TypedContext<P : RequestPayload>(
     val call: RoutingCall get() = _call
 }
 
-// --- Route DSL aliases ---
+// --- Route DSL ---
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.get(
     path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedGet<P, R>(path, handler)
+): Route = route(path) { get<P, R>(handler) }
 
 inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.get(
-    noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedGet<P, R>(handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.post(
-    path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedPost<P, R>(path, handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.post(
-    noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedPost<P, R>(handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.put(
-    path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedPut<P, R>(path, handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.put(
-    noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedPut<P, R>(handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.delete(
-    path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedDelete<P, R>(path, handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.delete(
-    noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedDelete<P, R>(handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.patch(
-    path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedPatch<P, R>(path, handler)
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.patch(
-    noinline handler: suspend TypedContext<P>.() -> R
-): Route = typedPatch<P, R>(handler)
-
-// --- Typed route registration ---
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedGet(
-    path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = route(path) { typedGet<P, R>(handler) }
-
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedGet(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route = registerTypedRoute<P, R>(HttpMethod.Get, handler)
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPost(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.post(
     path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = route(path) { typedPost<P, R>(handler) }
+): Route = route(path) { post<P, R>(handler) }
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPost(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.post(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route = registerTypedRoute<P, R>(HttpMethod.Post, handler)
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPut(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.put(
     path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = route(path) { typedPut<P, R>(handler) }
+): Route = route(path) { put<P, R>(handler) }
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPut(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.put(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route = registerTypedRoute<P, R>(HttpMethod.Put, handler)
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedDelete(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.delete(
     path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = route(path) { typedDelete<P, R>(handler) }
+): Route = route(path) { delete<P, R>(handler) }
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedDelete(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.delete(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route = registerTypedRoute<P, R>(HttpMethod.Delete, handler)
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.patch(
     path: String, noinline handler: suspend TypedContext<P>.() -> R
-): Route = route(path) { typedPatch<P, R>(handler) }
+): Route = route(path) { patch<P, R>(handler) }
 
-inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.typedPatch(
+inline fun <reified P : RequestPayload, reified R : ResponsePayload> Route.patch(
     noinline handler: suspend TypedContext<P>.() -> R
 ): Route = registerTypedRoute<P, R>(HttpMethod.Patch, handler)
 
@@ -526,6 +486,21 @@ private fun Route.collectTags(): List<String>? {
     return tags.ifEmpty { null }
 }
 
+private fun Route.collectSecurity(): List<Map<String, List<String>>>? {
+    val schemes = mutableListOf<String>()
+    var current: Route? = this
+    while (current != null) {
+        if (current is RoutingNode && current.selector is AuthenticationRouteSelector) {
+            (current.selector as AuthenticationRouteSelector).names
+                .filterNotNull()
+                .forEach { schemes.add(it) }
+        }
+        current = current.parent
+    }
+    return if (schemes.isEmpty()) null
+    else schemes.map { mapOf(it to listOf()) }
+}
+
 // --- OpenAPI spec registration ---
 
 fun registerRouteSpec(
@@ -537,8 +512,9 @@ fun registerRouteSpec(
     val path = route.fullPath()
     val spec = route.application.attributes.getOrNull(OpenApiSpecKey) ?: return
     val tags = route.collectTags()
+    val security = route.collectSecurity()
     try {
-        addRouteToSpec(spec, path, method, requestType, responseType, tags)
+        addRouteToSpec(spec, path, method, requestType, responseType, tags, security)
     } catch (e: Exception) {
         route.application.log.warn("Failed to register OpenAPI spec for $method $path: ${e.message}")
     }

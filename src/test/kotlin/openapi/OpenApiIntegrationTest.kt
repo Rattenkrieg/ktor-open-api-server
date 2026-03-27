@@ -73,18 +73,18 @@ class OpenApiIntegrationTest : ShouldSpec({
             }
             routing {
                 route("/users/me") {
-                    typedGet<AuthOnly, GetMeResp> {
+                    get<AuthOnly, GetMeResp> {
                         GetMeResp(
                             body = ResponseBody(ApiUserData("a@b.com", "User", "admin")),
                             `intercom-token` = ResponseHeader("token-123"),
                         )
                     }
-                    typedPatch<PatchMePayload, NoContent> {
+                    patch<PatchMePayload, NoContent> {
                         NoContent
                     }
                 }
                 route("/companies/{companyId}/tasks") {
-                    typedGet<CompanyIdPayload, TaskListResponse> {
+                    get<CompanyIdPayload, TaskListResponse> {
                         TaskListResponse(listOf("task1"))
                     }
                 }
@@ -148,7 +148,7 @@ class OpenApiIntegrationTest : ShouldSpec({
             }
             routing {
                 route("/health") {
-                    typedGet<AuthOnly, NoContent> {
+                    get<AuthOnly, NoContent> {
                         NoContent
                     }
                 }
@@ -169,7 +169,7 @@ class OpenApiIntegrationTest : ShouldSpec({
             }
             routing {
                 route("/health") {
-                    typedGet<AuthOnly, NoContent> {
+                    get<AuthOnly, NoContent> {
                         NoContent
                     }
                 }

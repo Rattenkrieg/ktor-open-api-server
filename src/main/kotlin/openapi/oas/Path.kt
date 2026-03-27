@@ -22,4 +22,5 @@ data class PathOperation(
     var requestBody: Request? = null,
     var responses: Map<Int, Response>? = null,
     var deprecated: Boolean = false,
+    var security: List<Map<String, List<String>>>? = null,
 )

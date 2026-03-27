@@ -12,6 +12,7 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.auth.*
 import io.ktor.server.routing.*
 import io.ktor.server.testing.*
 import kotlinx.serialization.Serializable
@@ -159,7 +160,7 @@ class TypedRoutingTest : ShouldSpec({
 
     fun openApiSpec() = OpenApiSpec(info = Info(title = "Test API", version = "1.0.0"))
 
-    should("extract body and path param from typedPost") {
+    should("extract body and path param from post") {
         testApplication {
             install(ContentNegotiation) { json() }
             install(OpenApi) {
@@ -167,7 +168,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedPost<CreateUserPayload, UserResponse> {
+                    post<CreateUserPayload, UserResponse> {
                         UserResponse(
                             id = "generated-id",
                             email = payload.body.value().email,
@@ -188,7 +189,7 @@ class TypedRoutingTest : ShouldSpec({
         }
     }
 
-    should("extract path and query params from typedGet") {
+    should("extract path and query params from get") {
         testApplication {
             install(ContentNegotiation) { json() }
             install(OpenApi) {
@@ -196,7 +197,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedGet<GetUsersPayload, Ok<List<UserResponse>>> {
+                    get<GetUsersPayload, Ok<List<UserResponse>>> {
                         val users = listOf(UserResponse("1", "a@b.com", "User1"))
                         Ok(if (payload.status?.value == "active") users else listOf())
                     }
@@ -216,7 +217,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedPost<PayloadWithHeader, UserResponse> {
+                    post<PayloadWithHeader, UserResponse> {
                         UserResponse(
                             id = payload.`X-Idempotency-Key`.value,
                             email = payload.body.value().email,
@@ -252,7 +253,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedGet<GetUsersPayload, Ok<List<UserResponse>>> {
+                    get<GetUsersPayload, Ok<List<UserResponse>>> {
                         @OptIn(RawCallAccess::class)
                         val userAgent = call.request.headers["User-Agent"] ?: "unknown"
                         Ok(listOf(UserResponse("1", userAgent, "User1")))
@@ -275,7 +276,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedPost<CreateUserPayload, CreatedUserDirectResponse> {
+                    post<CreateUserPayload, CreatedUserDirectResponse> {
                         CreatedUserDirectResponse("1", payload.body.value().email, payload.body.value().name)
                     }
                 }
@@ -303,7 +304,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users/{id}") {
-                    typedDelete<DeleteUserPayload, NoContent> {
+                    delete<DeleteUserPayload, NoContent> {
                         NoContent
                     }
                 }
@@ -330,10 +331,10 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedPost<CreateUserPayload, UserResponse> {
+                    post<CreateUserPayload, UserResponse> {
                         UserResponse("1", payload.body.value().email, payload.body.value().name)
                     }
-                    typedGet<GetUsersPayload, Ok<List<UserResponse>>> {
+                    get<GetUsersPayload, Ok<List<UserResponse>>> {
                         Ok(listOf())
                     }
                 }
@@ -373,7 +374,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedPost<CreateUserPayload, CreatedUserResponse> {
+                    post<CreateUserPayload, CreatedUserResponse> {
                         CreatedUserResponse(
                             body = ResponseBody(UserResponse("1", payload.body.value().email, payload.body.value().name))
                         )
@@ -406,7 +407,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedPost<CreateUserPayload, UserResponseWithHeader> {
+                    post<CreateUserPayload, UserResponseWithHeader> {
                         UserResponseWithHeader(
                             body = ResponseBody(UserResponse("1", payload.body.value().email, payload.body.value().name)),
                             `X-Request-Id` = ResponseHeader("req-abc-123"),
@@ -442,10 +443,10 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/users/me") {
-                    typedGet<GetUsersPayload, Ok<List<UserResponse>>> {
+                    get<GetUsersPayload, Ok<List<UserResponse>>> {
                         Ok(listOf())
                     }
-                    typedPatch<CreateUserPayload, NoContent> {
+                    patch<CreateUserPayload, NoContent> {
                         NoContent
                     }
                 }
@@ -473,7 +474,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users/{id}") {
-                    typedPatch<CreateUserPayload, NoContent> {
+                    patch<CreateUserPayload, NoContent> {
                         NoContent
                     }
                 }
@@ -502,7 +503,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users/{id}") {
-                    typedDelete<DeleteUserPayload, NoContent> {
+                    delete<DeleteUserPayload, NoContent> {
                         NoContent
                     }
                 }
@@ -528,7 +529,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/export") {
-                    typedGet<StreamPayload, ByteStreamResponse> {
+                    get<StreamPayload, ByteStreamResponse> {
                         ByteStreamResponse(ContentType.Application.OctetStream) {
                             write("binary-${payload.id.value}".toByteArray())
                         }
@@ -550,7 +551,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/csv") {
-                    typedGet<StreamPayload, TextStreamResponse> {
+                    get<StreamPayload, TextStreamResponse> {
                         TextStreamResponse(ContentType.Text.CSV) {
                             write("name,value\n")
                             write("item,${payload.id.value}\n")
@@ -573,7 +574,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/export") {
-                    typedGet<StreamPayload, ByteStreamResponse> {
+                    get<StreamPayload, ByteStreamResponse> {
                         ByteStreamResponse(ContentType.Application.OctetStream) {
                             write("data".toByteArray())
                         }
@@ -599,7 +600,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<AcceptPayload, Ok<Map<String, String>>> {
+                    get<AcceptPayload, Ok<Map<String, String>>> {
                         val acceptTypes = payload.accept.value.map { it.value }
                         Ok(mapOf("accept" to acceptTypes.joinToString(",")))
                     }
@@ -621,7 +622,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<AcceptPayload, Ok<Map<String, String>>> {
+                    get<AcceptPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
                     }
                 }
@@ -646,7 +647,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<AcceptPayload, ItemResult> {
+                    get<AcceptPayload, ItemResult> {
                         val acceptsCsv = payload.accept.value.any { it.value == "text/csv" }
                         if (acceptsCsv) {
                             ItemResult.Csv(ContentType.Text.CSV) { write("csv-data") }
@@ -678,7 +679,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/data/{id}") {
-                    typedGet<AcceptPayload, DirectDataResult> {
+                    get<AcceptPayload, DirectDataResult> {
                         val acceptsCsv = payload.accept.value.any { it.value == "text/csv" }
                         if (acceptsCsv) {
                             DirectDataResult.Csv { write("a,b,c") }
@@ -710,7 +711,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedPost<OriginPayload, Ok<Map<String, String>>> {
+                    post<OriginPayload, Ok<Map<String, String>>> {
                         Ok(mapOf(
                             "id" to payload.id.value,
                             "remoteHost" to payload.origin.value.remoteHost,
@@ -732,7 +733,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedPost<OriginPayload, Ok<Map<String, String>>> {
+                    post<OriginPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
                     }
                 }
@@ -757,7 +758,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/upload") {
-                    typedPost<MultipartPayload, Ok<Map<String, String>>> {
+                    post<MultipartPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
                     }
                 }
@@ -783,7 +784,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/search") {
-                    typedGet<NamedQueryPayload, Ok<Map<String, String>>> {
+                    get<NamedQueryPayload, Ok<Map<String, String>>> {
                         val flowTypes = payload.flowType?.value?.joinToString(",") ?: "none"
                         val companies = payload.company?.value?.joinToString(",") ?: "none"
                         val order = payload.orderBy?.value ?: "default"
@@ -808,7 +809,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/search") {
-                    typedGet<NamedQueryPayload, Ok<Map<String, String>>> {
+                    get<NamedQueryPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
                     }
                 }
@@ -840,7 +841,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<RenamedHeaderPayload, Ok<Map<String, String>>> {
+                    get<RenamedHeaderPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("header" to payload.customHeader.value))
                     }
                 }
@@ -871,7 +872,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/approve") {
-                    typedPost<NullableBodyPayload, Ok<Map<String, String>>> {
+                    post<NullableBodyPayload, Ok<Map<String, String>>> {
                         val email = payload.body?.value()?.email ?: "none"
                         Ok(mapOf("id" to payload.id.value, "email" to email))
                     }
@@ -899,7 +900,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/approve") {
-                    typedPost<NullableBodyPayload, Ok<Map<String, String>>> {
+                    post<NullableBodyPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
                     }
                 }
@@ -923,7 +924,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<CookiePayload, Ok<Map<String, String>>> {
+                    get<CookiePayload, Ok<Map<String, String>>> {
                         Ok(mapOf(
                             "session" to payload.session.value,
                             "tracking" to (payload.tracking?.value ?: "none"),
@@ -950,7 +951,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<CookiePayload, Ok<Map<String, String>>> {
+                    get<CookiePayload, Ok<Map<String, String>>> {
                         Ok(mapOf(
                             "session" to payload.session.value,
                             "tracking" to (payload.tracking?.value ?: "none"),
@@ -977,7 +978,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedGet<CookiePayload, Ok<Map<String, String>>> {
+                    get<CookiePayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
                     }
                 }
@@ -1002,7 +1003,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/link") {
-                    typedGet<RedirectPayload, RedirectResponse> {
+                    get<RedirectPayload, RedirectResponse> {
                         RedirectResponse(url = "https://example.com/${payload.id.value}", permanent = false)
                     }
                 }
@@ -1022,7 +1023,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/link") {
-                    typedGet<RedirectPayload, RedirectResponse> {
+                    get<RedirectPayload, RedirectResponse> {
                         RedirectResponse(url = "https://example.com/${payload.id.value}", permanent = true)
                     }
                 }
@@ -1042,7 +1043,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/link") {
-                    typedGet<RedirectPayload, RedirectResponse> {
+                    get<RedirectPayload, RedirectResponse> {
                         RedirectResponse(url = "https://example.com", permanent = false)
                     }
                 }
@@ -1067,7 +1068,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/process") {
-                    typedPost<StreamPayload, ProcessResult> {
+                    post<StreamPayload, ProcessResult> {
                         when (payload.id.value) {
                             "ok" -> ProcessResult.Success(UserResponse("1", "a@b.com", "User"))
                             "bad" -> ProcessResult.Invalid(ErrorDetail("INVALID", "bad request"))
@@ -1098,7 +1099,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/process") {
-                    typedPost<StreamPayload, ProcessResult> {
+                    post<StreamPayload, ProcessResult> {
                         ProcessResult.Success(UserResponse("1", "a@b.com", "User"))
                     }
                 }
@@ -1129,7 +1130,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}") {
-                    typedDelete<DeleteUserPayload, SimpleResult> {
+                    delete<DeleteUserPayload, SimpleResult> {
                         SimpleResult.Done
                     }
                 }
@@ -1156,7 +1157,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/export") {
-                    typedGet<StreamPayload, ByteStreamResponse> {
+                    get<StreamPayload, ByteStreamResponse> {
                         ByteStreamResponse(ContentType.Application.OctetStream, fileName = "report.zip") {
                             write("binary-data".toByteArray())
                         }
@@ -1178,7 +1179,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/csv") {
-                    typedGet<StreamPayload, TextStreamResponse> {
+                    get<StreamPayload, TextStreamResponse> {
                         TextStreamResponse(ContentType.Text.CSV, fileName = "report.csv") {
                             write("name,value\n")
                         }
@@ -1200,7 +1201,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/export") {
-                    typedGet<StreamPayload, ByteStreamResponse> {
+                    get<StreamPayload, ByteStreamResponse> {
                         ByteStreamResponse(ContentType.Application.OctetStream) {
                             write("data".toByteArray())
                         }
@@ -1221,7 +1222,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/external-link") {
-                    typedGet<StreamPayload, ExternalLinkResult> {
+                    get<StreamPayload, ExternalLinkResult> {
                         when (payload.id.value) {
                             "exists" -> ExternalLinkResult.Redirect("https://example.com/doc")
                             else -> ExternalLinkResult.Missing
@@ -1246,7 +1247,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/items/{id}/external-link") {
-                    typedGet<StreamPayload, ExternalLinkResult> {
+                    get<StreamPayload, ExternalLinkResult> {
                         ExternalLinkResult.Missing
                     }
                 }
@@ -1278,7 +1279,7 @@ class TypedRoutingTest : ShouldSpec({
                             RouteSelectorEvaluation.Transparent
                         override fun toString(): String = ""
                     }).apply {
-                        typedGet<StreamPayload, Ok<Map<String, String>>> {
+                        get<StreamPayload, Ok<Map<String, String>>> {
                             Ok(mapOf("id" to payload.id.value))
                         }
                     }
@@ -1291,6 +1292,51 @@ class TypedRoutingTest : ShouldSpec({
         }
     }
 
+    should("detect authenticate block and add security to spec") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            install(Authentication) {
+                register(object : AuthenticationProvider(
+                    object : AuthenticationProvider.Config("test-auth") {}
+                ) {
+                    override suspend fun onAuthenticate(context: AuthenticationContext) {}
+                })
+            }
+            routing {
+                authenticate("test-auth") {
+                    route("/secured") {
+                        get<GetUsersPayload, Ok<List<UserResponse>>> {
+                            Ok(listOf())
+                        }
+                    }
+                }
+                route("/public") {
+                    get<GetUsersPayload, Ok<List<UserResponse>>> {
+                        Ok(listOf())
+                    }
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val securedOp = specJson["paths"]?.jsonObject
+                ?.get("/secured")?.jsonObject
+                ?.get("get")?.jsonObject
+            securedOp.shouldNotBeNull()
+            val security = securedOp["security"]?.jsonArray
+            security.shouldNotBeNull()
+            security.size shouldBe 1
+            security[0].jsonObject.keys shouldContain "test-auth"
+
+            val publicOp = specJson["paths"]?.jsonObject
+                ?.get("/public")?.jsonObject
+                ?.get("get")?.jsonObject
+            publicOp.shouldNotBeNull()
+            publicOp["security"] shouldBe null
+        }
+    }
+
     should("serialize direct @Serializable response payload with data properties") {
         testApplication {
             install(ContentNegotiation) { json() }
@@ -1299,7 +1345,7 @@ class TypedRoutingTest : ShouldSpec({
             }
             routing {
                 route("/api/v1/companies/{companyId}/users") {
-                    typedGet<GetUsersPayload, UserResponse> {
+                    get<GetUsersPayload, UserResponse> {
                         UserResponse("1", "a@b.com", "User1")
                     }
                 }
