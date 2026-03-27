@@ -30,4 +30,28 @@ data class Server(
 @Serializable
 data class Components(
     val schemas: MutableMap<String, openapi.schema.JsonSchema> = mutableMapOf(),
+    val securitySchemes: MutableMap<String, SecurityScheme> = mutableMapOf(),
 )
+
+@Serializable
+data class SecurityScheme(
+    val type: String,
+    val scheme: String? = null,
+    val bearerFormat: String? = null,
+    val name: String? = null,
+    val `in`: String? = null,
+) {
+    companion object {
+        fun bearer(bearerFormat: String? = "JWT") = SecurityScheme(
+            type = "http",
+            scheme = "bearer",
+            bearerFormat = bearerFormat,
+        )
+        fun basic() = SecurityScheme(type = "http", scheme = "basic")
+        fun apiKey(name: String, location: String = "header") = SecurityScheme(
+            type = "apiKey",
+            name = name,
+            `in` = location,
+        )
+    }
+}
