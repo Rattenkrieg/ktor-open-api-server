@@ -492,8 +492,7 @@ private fun Route.collectSecurity(): List<Map<String, List<String>>>? {
     while (current != null) {
         if (current is RoutingNode && current.selector is AuthenticationRouteSelector) {
             (current.selector as AuthenticationRouteSelector).names
-                .filterNotNull()
-                .forEach { schemes.add(it) }
+                .forEach { schemes.add(it ?: "default") }
         }
         current = current.parent
     }
