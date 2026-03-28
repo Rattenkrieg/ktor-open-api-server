@@ -1,8 +1,17 @@
 // Originally derived from kompendium (https://github.com/bkbnio/kompendium), MIT License
 package openapi.schema
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Transient
+import kotlinx.serialization.descriptors.PolymorphicKind
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.SerialKind
+import kotlinx.serialization.descriptors.StructureKind
+import kotlinx.serialization.descriptors.elementNames
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.serializer
 import java.util.UUID
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty
@@ -17,7 +26,191 @@ import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaField
 
+@OptIn(ExperimentalSerializationApi::class)
 object SchemaGenerator {
+
+    fun fromDescriptor(
+        descriptor: SerialDescriptor,
+        json: Json,
+        cache: MutableMap<String, JsonSchema>,
+    ): JsonSchema {
+        if (descriptor.isInline) {
+            val inner = descriptor.getElementDescriptor(0)
+            return fromDescriptor(inner, json, cache)
+        }
+        val slug = descriptor.slug()
+        cache[slug]?.let { return it }
+        return when (descriptor.kind) {
+            PrimitiveKind.STRING -> TypeDefinition.STRING
+            PrimitiveKind.INT -> TypeDefinition.INT
+            PrimitiveKind.LONG -> TypeDefinition.LONG
+            PrimitiveKind.DOUBLE -> TypeDefinition.DOUBLE
+            PrimitiveKind.FLOAT -> TypeDefinition.FLOAT
+            PrimitiveKind.BOOLEAN -> TypeDefinition.BOOLEAN
+            PrimitiveKind.BYTE -> TypeDefinition.INT
+            PrimitiveKind.SHORT -> TypeDefinition.INT
+            PrimitiveKind.CHAR -> TypeDefinition.STRING
+            SerialKind.ENUM -> handleDescriptorEnum(descriptor, cache)
+            StructureKind.LIST -> handleDescriptorList(descriptor, json, cache)
+            StructureKind.MAP -> handleDescriptorMap(descriptor, json, cache)
+            StructureKind.CLASS, StructureKind.OBJECT -> handleDescriptorObject(descriptor, json, cache)
+            SerialKind.CONTEXTUAL -> handleDescriptorContextual(descriptor, json, cache)
+            is PolymorphicKind -> handleDescriptorPolymorphic(descriptor, json, cache)
+        }
+    }
+
+    private fun handleDescriptorEnum(
+        descriptor: SerialDescriptor,
+        cache: MutableMap<String, JsonSchema>,
+    ): JsonSchema {
+        cache[descriptor.slug()] = ReferenceDefinition(descriptor.referenceSlug())
+        val options = descriptor.elementNames.toSet()
+        return EnumDefinition(enum = options)
+    }
+
+    private fun handleDescriptorList(
+        descriptor: SerialDescriptor,
+        json: Json,
+        cache: MutableMap<String, JsonSchema>,
+    ): JsonSchema {
+        val elementDescriptor = descriptor.getElementDescriptor(0)
+        val elementSchema = fromDescriptor(elementDescriptor, json, cache).let {
+            if (it.isObjectOrEnum()) {
+                cache[elementDescriptor.slug()] = it
+                ReferenceDefinition(elementDescriptor.referenceSlug())
+            } else {
+                it
+            }
+        }
+        return ArrayDefinition(elementSchema)
+    }
+
+    private fun handleDescriptorMap(
+        descriptor: SerialDescriptor,
+        json: Json,
+        cache: MutableMap<String, JsonSchema>,
+    ): JsonSchema {
+        // Map descriptor element 0 = key, element 1 = value
+        val valueDescriptor = descriptor.getElementDescriptor(1)
+        val valueSchema = fromDescriptor(valueDescriptor, json, cache).let {
+            if (it is TypeDefinition && it.type == "object") {
+                cache[valueDescriptor.slug()] = it
+                ReferenceDefinition(valueDescriptor.referenceSlug())
+            } else {
+                it
+            }
+        }
+        return MapDefinition(valueSchema)
+    }
+
+    private fun handleDescriptorObject(
+        descriptor: SerialDescriptor,
+        json: Json,
+        cache: MutableMap<String, JsonSchema>,
+    ): JsonSchema {
+        if (descriptor.elementsCount == 0) {
+            return TypeDefinition(type = "object")
+        }
+        val slug = descriptor.slug()
+        val referenceSlug = descriptor.referenceSlug()
+        cache[slug] = ReferenceDefinition(referenceSlug)
+        val props = mutableMapOf<String, JsonSchema>()
+        val required = mutableSetOf<String>()
+        for (i in 0 until descriptor.elementsCount) {
+            val name = descriptor.getElementName(i)
+            val elementDescriptor = descriptor.getElementDescriptor(i)
+            val elementSchema = fromDescriptor(elementDescriptor, json, cache).let {
+                if (it.isObjectOrEnum()) {
+                    cache[elementDescriptor.slug()] = it
+                    ReferenceDefinition(elementDescriptor.referenceSlug())
+                } else {
+                    it
+                }
+            }
+            val nullChecked = when (elementDescriptor.isNullable && !elementSchema.isNullable()) {
+                true -> OneOfDefinition(NullableDefinition(), elementSchema)
+                false -> elementSchema
+            }
+            props[name] = nullChecked
+            if (!descriptor.isElementOptional(i) && !elementDescriptor.isNullable) {
+                required.add(name)
+            }
+        }
+        val definition = TypeDefinition(
+            type = "object",
+            properties = props,
+            required = required,
+        )
+        cache[slug] = definition
+        return definition
+    }
+
+    private fun handleDescriptorContextual(
+        descriptor: SerialDescriptor,
+        json: Json,
+        cache: MutableMap<String, JsonSchema>,
+    ): JsonSchema {
+        val resolved = resolveContextual(descriptor, json)
+        if (resolved != null) {
+            return fromDescriptor(resolved, json, cache)
+        }
+        return TypeDefinition(type = "object")
+    }
+
+    private fun resolveContextual(descriptor: SerialDescriptor, json: Json): SerialDescriptor? {
+        val serialName = descriptor.serialName
+        return try {
+            val clazz = Class.forName(serialName).kotlin
+            val type = clazz.createType()
+            json.serializersModule.serializer(type).descriptor
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun handleDescriptorPolymorphic(
+        descriptor: SerialDescriptor,
+        json: Json,
+        cache: MutableMap<String, JsonSchema>,
+    ): JsonSchema {
+        // Sealed class descriptor structure:
+        //   element 0 = "type" discriminator (PrimitiveKind.STRING)
+        //   element 1 = "value" wrapper whose sub-elements are the actual subclass descriptors
+        val subclasses = mutableSetOf<JsonSchema>()
+        if (descriptor.elementsCount >= 2) {
+            val valueDescriptor = descriptor.getElementDescriptor(1)
+            for (i in 0 until valueDescriptor.elementsCount) {
+                val subDescriptor = valueDescriptor.getElementDescriptor(i)
+                val schema = fromDescriptor(subDescriptor, json, cache)
+                val enriched = addDescriptorSealedDiscriminator(subDescriptor, schema)
+                if (enriched is TypeDefinition && enriched.type == "object") {
+                    cache[subDescriptor.slug()] = enriched
+                    subclasses.add(ReferenceDefinition(subDescriptor.referenceSlug()))
+                } else {
+                    subclasses.add(enriched)
+                }
+            }
+        }
+        if (subclasses.isNotEmpty()) {
+            return AnyOfDefinition(subclasses)
+        }
+        return TypeDefinition(type = "object")
+    }
+
+    private fun addDescriptorSealedDiscriminator(
+        descriptor: SerialDescriptor,
+        schema: JsonSchema,
+    ): JsonSchema {
+        if (schema is TypeDefinition && schema.type == "object") {
+            return schema.copy(
+                required = schema.required?.plus("type"),
+                properties = schema.properties?.plus("type" to EnumDefinition(enum = setOf(descriptor.serialName))),
+            )
+        }
+        return schema
+    }
+
+    // --- KType-based entry points (bridge to descriptor-based implementation) ---
 
     fun fromTypeToSchema(
         type: KType,
@@ -284,6 +477,17 @@ fun KType.slug(): String = when {
 }
 
 fun KType.referenceSlug(): String = "$COMPONENT_SLUG/${slug()}"
+
+@OptIn(ExperimentalSerializationApi::class)
+fun SerialDescriptor.slug(): String {
+    val name = serialName
+    // Strip package prefix, keep only class name parts
+    val lastDot = name.lastIndexOf('.')
+    return if (lastDot >= 0) name.substring(lastDot + 1) else name
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+fun SerialDescriptor.referenceSlug(): String = "$COMPONENT_SLUG/${slug()}"
 
 private fun KClass<*>.schemaSlug(): String {
     if (java.packageName == "java.lang") return simpleName!!
