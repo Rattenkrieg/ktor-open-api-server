@@ -1,0 +1,143 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.rattenkrieg",
+    "module": "ktor-open-api-server",
+    "version": "0.1.0-SNAPSHOT",
+    "attributes": {
+      "org.gradle.status": "integration"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.3.0"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 21,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.1.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "ktor-open-api-server-0.1.0-SNAPSHOT.jar",
+          "url": "ktor-open-api-server-0.1.0-SNAPSHOT.jar",
+          "size": 279668,
+          "sha512": "5dd13414e2bc161b8b7f42339d89aa1d9d92e459a5029194a61a719222f7856f89e4b4eb2e6d7127e51455821e6015dfb6520661701e4d62bcfe825567ba79c8",
+          "sha256": "f94d47c9abe77724901d0b7531db464a1fb4055824448a5259b42dd4265439d3",
+          "sha1": "c81f3e7caece29b04779b01c1f193983b840ac77",
+          "md5": "9b20f7a80c249601cf385f6c9a898536"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 21,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "io.ktor",
+          "module": "ktor-server-core",
+          "version": {
+            "requires": "3.1.2"
+          }
+        },
+        {
+          "group": "io.ktor",
+          "module": "ktor-server-auth",
+          "version": {
+            "requires": "3.1.2"
+          }
+        },
+        {
+          "group": "io.ktor",
+          "module": "ktor-server-content-negotiation",
+          "version": {
+            "requires": "3.1.2"
+          }
+        },
+        {
+          "group": "io.ktor",
+          "module": "ktor-serialization-kotlinx-json",
+          "version": {
+            "requires": "3.1.2"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-reflect"
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.1.20"
+          }
+        }
+      ],
+      "dependencyConstraints": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-reflect",
+          "version": {
+            "requires": "2.1.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "ktor-open-api-server-0.1.0-SNAPSHOT.jar",
+          "url": "ktor-open-api-server-0.1.0-SNAPSHOT.jar",
+          "size": 279668,
+          "sha512": "5dd13414e2bc161b8b7f42339d89aa1d9d92e459a5029194a61a719222f7856f89e4b4eb2e6d7127e51455821e6015dfb6520661701e4d62bcfe825567ba79c8",
+          "sha256": "f94d47c9abe77724901d0b7531db464a1fb4055824448a5259b42dd4265439d3",
+          "sha1": "c81f3e7caece29b04779b01c1f193983b840ac77",
+          "md5": "9b20f7a80c249601cf385f6c9a898536"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "ktor-open-api-server-0.1.0-SNAPSHOT-sources.jar",
+          "url": "ktor-open-api-server-0.1.0-SNAPSHOT-sources.jar",
+          "size": 14567,
+          "sha512": "9928f44be09c8bea48776a8d6b23f82e61f3c2ef32606b219157972e34d76336306c866b3304a8426df9f45357aab1d413c41eecbdf008c2bbd1f92322ff80e9",
+          "sha256": "2db11683780bbe88d5a67b47116f1faa779a34bdfb16c8195f2fbfd325f807ee",
+          "sha1": "3bbc73eaefcbcb3e3e430dc42f8c6b4d4f36f29c",
+          "md5": "9e827393966dc539261f645f698099e8"
+        }
+      ]
+    }
+  ]
+}

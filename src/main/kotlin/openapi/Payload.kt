@@ -1,6 +1,7 @@
 package openapi
 
 import io.ktor.http.*
+import io.ktor.util.date.GMTDate
 import io.ktor.http.content.*
 import java.io.OutputStream
 import java.io.Writer
@@ -75,6 +76,7 @@ data class ResponseCookie(
     override val value: String,
     val path: String? = null,
     val maxAge: Int? = null,
+    val expires: GMTDate? = null,
     val httpOnly: Boolean = true,
     val secure: Boolean = true,
     val encoding: CookieEncoding = CookieEncoding.RAW,

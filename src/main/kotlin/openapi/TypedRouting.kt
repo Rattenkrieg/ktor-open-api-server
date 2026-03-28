@@ -462,6 +462,7 @@ private suspend fun sendBodyResponse(
                 encoding = cookie.encoding,
                 path = cookie.path,
                 maxAge = cookie.maxAge?.toLong(),
+                expires = cookie.expires,
                 httpOnly = cookie.httpOnly,
                 secure = cookie.secure,
                 extensions = cookie.extensions,
