@@ -71,6 +71,15 @@ sealed interface ResponsePayloadItem<out T> {
 @kotlinx.serialization.Serializable
 data class ResponseBody<T : @kotlinx.serialization.Serializable Any>(override val value: T) : ResponsePayloadItem<T>
 data class ResponseHeader(override val value: String) : ResponsePayloadItem<String>
+data class ResponseCookie(
+    override val value: String,
+    val path: String? = null,
+    val maxAge: Int? = null,
+    val httpOnly: Boolean = true,
+    val secure: Boolean = true,
+    val encoding: CookieEncoding = CookieEncoding.RAW,
+    val extensions: Map<String, String?> = mapOf(),
+) : ResponsePayloadItem<String>
 
 data class Ok<T : Any>(val body: ResponseBody<T>) : OkResponsePayload() {
     constructor(value: T) : this(ResponseBody(value))

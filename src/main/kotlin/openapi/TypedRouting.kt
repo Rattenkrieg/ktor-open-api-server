@@ -270,6 +270,7 @@ sealed interface ResponsePlan {
         val bodySerializer: KSerializer<Any>?,
         val bodyProperty: KProperty1<Any, *>?,
         val headerProperties: List<Pair<String, KProperty1<Any, *>>>,
+        val cookieProperties: List<Pair<String, KProperty1<Any, *>>> = listOf(),
     ) : ResponsePlan
 
     data class DirectPayload(
@@ -318,6 +319,7 @@ sealed interface ResponsePlan {
             var bodyKType: KType? = null
             var bodyProperty: KProperty1<Any, *>? = null
             val headerProperties = mutableListOf<Pair<String, KProperty1<Any, *>>>()
+            val cookieProperties = mutableListOf<Pair<String, KProperty1<Any, *>>>()
             for (param in constructor.parameters) {
                 val classifier = param.type.classifier as? KClass<*> ?: continue
                 val paramName = param.name ?: continue
@@ -337,6 +339,12 @@ sealed interface ResponsePlan {
                             headerProperties.add(paramName to it)
                         }
                     }
+                    classifier == ResponseCookie::class -> {
+                        (properties[paramName] as? KProperty1<Any, *>)?.let {
+                            val cookieName = param.findAnnotation<Name>()?.value ?: paramName
+                            cookieProperties.add(cookieName to it)
+                        }
+                    }
                     else -> hasDataProperties = true
                 }
             }
@@ -344,7 +352,7 @@ sealed interface ResponsePlan {
                 val bodySerializer = bodyKType?.let {
                     json.serializersModule.serializer(it) as KSerializer<Any>
                 }
-                return WithBody(json, bodySerializer, bodyProperty, headerProperties)
+                return WithBody(json, bodySerializer, bodyProperty, headerProperties, cookieProperties)
             }
             if (hasDataProperties) {
                 val type = responseType ?: kClass.createType()
@@ -444,6 +452,20 @@ private suspend fun sendBodyResponse(
     for ((name, prop) in plan.headerProperties) {
         (prop.get(response) as? ResponseHeader)?.let {
             call.response.headers.append(name, it.value)
+        }
+    }
+    for ((name, prop) in plan.cookieProperties) {
+        (prop.get(response) as? ResponseCookie)?.let { cookie ->
+            call.response.cookies.append(
+                name = name,
+                value = cookie.value,
+                encoding = cookie.encoding,
+                path = cookie.path,
+                maxAge = cookie.maxAge?.toLong(),
+                httpOnly = cookie.httpOnly,
+                secure = cookie.secure,
+                extensions = cookie.extensions,
+            )
         }
     }
     val bodyWrapper = plan.bodyProperty?.get(response) as? ResponseBody<*>

@@ -64,6 +64,12 @@ data class UserResponseWithHeader(
     val `X-Request-Id`: ResponseHeader,
 ) : OkResponsePayload()
 
+data class UserResponseWithCookie(
+    val body: ResponseBody<UserResponse>,
+    @Name("session-token") val sessionToken: ResponseCookie,
+    @Name("tracking-id") val trackingId: ResponseCookie?,
+) : OkResponsePayload()
+
 data class StreamPayload(
     val id: PathParam,
 ) : RequestPayload
@@ -448,6 +454,70 @@ class TypedRoutingTest : ShouldSpec({
             val headers = resp200["headers"]?.jsonObject
             headers.shouldNotBeNull()
             headers["X-Request-Id"].shouldNotBeNull()
+        }
+    }
+
+    should("set response cookies from ResponsePayload") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/api/v1/companies/{companyId}/users") {
+                    post<CreateUserPayload, UserResponseWithCookie> {
+                        UserResponseWithCookie(
+                            body = ResponseBody(UserResponse("1", payload.body.value().email, payload.body.value().name)),
+                            sessionToken = ResponseCookie(
+                                value = "abc-session-token",
+                                path = "/",
+                                httpOnly = true,
+                                secure = true,
+                            ),
+                            trackingId = ResponseCookie(
+                                value = "track-123",
+                                path = "/",
+                                httpOnly = false,
+                                secure = false,
+                            ),
+                        )
+                    }
+                }
+            }
+            val response = client.post("/api/v1/companies/abc-123/users") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"email":"a@b.com","name":"Test"}""")
+            }
+            response.status shouldBe HttpStatusCode.OK
+            val cookies = response.setCookie()
+            cookies.any { it.name == "session-token" && it.value == "abc-session-token" } shouldBe true
+            cookies.any { it.name == "tracking-id" && it.value == "track-123" } shouldBe true
+            val body = Json.decodeFromString<UserResponse>(response.bodyAsText())
+            body.id shouldBe "1"
+        }
+    }
+
+    should("skip null response cookies") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/api/v1/companies/{companyId}/users") {
+                    post<CreateUserPayload, UserResponseWithCookie> {
+                        UserResponseWithCookie(
+                            body = ResponseBody(UserResponse("1", payload.body.value().email, payload.body.value().name)),
+                            sessionToken = ResponseCookie(value = "token-only"),
+                            trackingId = null,
+                        )
+                    }
+                }
+            }
+            val response = client.post("/api/v1/companies/abc-123/users") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"email":"a@b.com","name":"Test"}""")
+            }
+            response.status shouldBe HttpStatusCode.OK
+            val cookies = response.setCookie()
+            cookies.any { it.name == "session-token" } shouldBe true
+            cookies.none { it.name == "tracking-id" } shouldBe true
         }
     }
 
