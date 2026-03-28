@@ -488,10 +488,61 @@ class TypedRoutingTest : ShouldSpec({
             }
             response.status shouldBe HttpStatusCode.OK
             val cookies = response.setCookie()
-            cookies.any { it.name == "session-token" && it.value == "abc-session-token" } shouldBe true
-            cookies.any { it.name == "tracking-id" && it.value == "track-123" } shouldBe true
+            val session = cookies.first { it.name == "session-token" }
+            session.value shouldBe "abc-session-token"
+            session.path shouldBe "/"
+            session.httpOnly shouldBe true
+            session.secure shouldBe true
+            val tracking = cookies.first { it.name == "tracking-id" }
+            tracking.value shouldBe "track-123"
+            tracking.httpOnly shouldBe false
+            tracking.secure shouldBe false
             val body = Json.decodeFromString<UserResponse>(response.bodyAsText())
             body.id shouldBe "1"
+        }
+    }
+
+    should("set cookie maxAge and expires fields") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/api/v1/companies/{companyId}/users") {
+                    post<CreateUserPayload, UserResponseWithCookie> {
+                        UserResponseWithCookie(
+                            body = ResponseBody(
+                                UserResponse("1", payload.body.value().email, payload.body.value().name),
+                            ),
+                            sessionToken = ResponseCookie(
+                                value = "long-lived",
+                                path = "/auth",
+                                maxAge = 86400,
+                                httpOnly = true,
+                                secure = true,
+                            ),
+                            trackingId = ResponseCookie(
+                                value = "expired",
+                                path = "/",
+                                expires = io.ktor.util.date.GMTDate.START,
+                                httpOnly = true,
+                                secure = true,
+                            ),
+                        )
+                    }
+                }
+            }
+            val response = client.post("/api/v1/companies/abc-123/users") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"email":"a@b.com","name":"Test"}""")
+            }
+            response.status shouldBe HttpStatusCode.OK
+            val cookies = response.setCookie()
+            val session = cookies.first { it.name == "session-token" }
+            session.maxAge shouldBe 86400
+            session.path shouldBe "/auth"
+            val expired = cookies.first { it.name == "tracking-id" }
+            expired.value shouldBe "expired"
+            expired.expires shouldBe io.ktor.util.date.GMTDate.START
         }
     }
 
