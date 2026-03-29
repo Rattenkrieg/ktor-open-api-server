@@ -551,7 +551,8 @@ fun registerRouteSpec(
     val tags = route.collectTags()
     val security = route.collectSecurity()
     try {
-        addRouteToSpec(spec, path, method, requestType, responseType, tags, security)
+        val json = route.application.attributes.getOrNull(OpenApiJsonKey) ?: Json.Default
+        addRouteToSpec(spec, path, method, requestType, responseType, tags, security, json)
     } catch (e: Exception) {
         route.application.log.warn("Failed to register OpenAPI spec for $method $path: ${e.message}")
     }
