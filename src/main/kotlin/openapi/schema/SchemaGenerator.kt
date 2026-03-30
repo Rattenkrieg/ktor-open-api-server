@@ -10,8 +10,14 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.SerialKind
 import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.descriptors.elementNames
+import kotlinx.serialization.descriptors.capturedKClass
+import kotlinx.serialization.descriptors.getContextualDescriptor
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import java.util.UUID
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty
@@ -145,6 +151,14 @@ object SchemaGenerator {
         return definition
     }
 
+    private val wellKnownContextual = mapOf<KClass<*>, JsonSchema>(
+        UUID::class to TypeDefinition.UUID,
+        Instant::class to TypeDefinition(type = "string", format = "date-time"),
+        LocalDate::class to TypeDefinition(type = "string", format = "date"),
+        LocalDateTime::class to TypeDefinition(type = "string", format = "date-time"),
+        OffsetDateTime::class to TypeDefinition(type = "string", format = "date-time"),
+    )
+
     private fun handleDescriptorContextual(
         descriptor: SerialDescriptor,
         json: Json,
@@ -154,15 +168,19 @@ object SchemaGenerator {
         if (resolved != null) {
             return fromDescriptor(resolved, json, cache)
         }
-        return TypeDefinition(type = "object")
+        val captured = descriptor.capturedKClass
+        return wellKnownContextual[captured] ?: TypeDefinition(type = "object")
     }
 
     private fun resolveContextual(descriptor: SerialDescriptor, json: Json): SerialDescriptor? {
-        val serialName = descriptor.serialName
+        val module = json.serializersModule
+        module.getContextualDescriptor(descriptor)?.let { return it }
+        val captured = descriptor.capturedKClass
+        // Well-known types produce better schemas than what Class.forName reflection would derive
+        if (captured != null && captured in wellKnownContextual) return null
         return try {
-            val clazz = Class.forName(serialName).kotlin
-            val type = clazz.createType()
-            json.serializersModule.serializer(type).descriptor
+            val clazz = captured ?: Class.forName(descriptor.serialName).kotlin
+            module.getContextual(clazz)?.descriptor
         } catch (_: Exception) {
             null
         }
@@ -219,7 +237,7 @@ object SchemaGenerator {
         val slug = type.slug()
         cache[slug]?.let { return it }
         return when (val clazz = type.classifier as KClass<*>) {
-            Unit::class -> error("Unit cannot be converted to JsonSchema, use fromTypeOrUnit()")
+            Unit::class -> error("Unit cannot be converted to JsonSchema")
             Int::class -> checkForNull(type, TypeDefinition.INT)
             Long::class -> checkForNull(type, TypeDefinition.LONG)
             Double::class -> checkForNull(type, TypeDefinition.DOUBLE)
@@ -229,14 +247,6 @@ object SchemaGenerator {
             UUID::class -> checkForNull(type, TypeDefinition.UUID)
             else -> complexTypeToSchema(clazz, type, cache)
         }
-    }
-
-    fun fromTypeOrUnit(
-        type: KType,
-        cache: MutableMap<String, JsonSchema> = mutableMapOf(),
-    ): JsonSchema? = when (type.classifier as KClass<*>) {
-        Unit::class -> null
-        else -> fromTypeToSchema(type, cache)
     }
 
     private fun checkForNull(type: KType, schema: JsonSchema): JsonSchema = when (type.isMarkedNullable) {
@@ -481,9 +491,13 @@ fun KType.referenceSlug(): String = "$COMPONENT_SLUG/${slug()}"
 @OptIn(ExperimentalSerializationApi::class)
 fun SerialDescriptor.slug(): String {
     val name = serialName
-    // Strip package prefix, keep only class name parts
-    val lastDot = name.lastIndexOf('.')
-    return if (lastDot >= 0) name.substring(lastDot + 1) else name
+    val parts = name.split('.')
+    val classStart = parts.indexOfFirst { it.firstOrNull()?.isUpperCase() == true }
+    return if (classStart >= 0) {
+        parts.subList(classStart, parts.size).joinToString("")
+    } else {
+        parts.last()
+    }
 }
 
 @OptIn(ExperimentalSerializationApi::class)

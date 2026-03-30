@@ -22,12 +22,15 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.serializer
 import openapi.schema.slug
 import openapi.schema.ArrayDefinition
+import org.slf4j.LoggerFactory
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 import kotlin.reflect.KTypeParameter
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 import kotlin.reflect.full.primaryConstructor
+
+private val logger = LoggerFactory.getLogger("openapi.OpenApi")
 
 val OpenApiSpecKey = AttributeKey<OpenApiSpec>("OpenApiSpec")
 val OpenApiJsonKey = AttributeKey<Json>("OpenApiJson")
@@ -292,7 +295,8 @@ private fun schemaFromType(
 ): JsonSchema = try {
     val serializer = json.serializersModule.serializer(type)
     SchemaGenerator.fromDescriptor(serializer.descriptor, json, cache)
-} catch (_: Exception) {
+} catch (e: Exception) {
+    logger.warn("Descriptor-based schema generation failed for {}, falling back to reflection: {}", type, e.message)
     SchemaGenerator.fromTypeToSchema(type, cache)
 }
 

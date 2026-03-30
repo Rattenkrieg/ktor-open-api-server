@@ -3,6 +3,7 @@ package openapi
 import io.kotest.core.spec.style.ShouldSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.serialization.Contextual
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -20,10 +21,12 @@ import openapi.schema.EnumDefinition
 import openapi.schema.JsonSchema
 import openapi.schema.MapDefinition
 import openapi.schema.OneOfDefinition
+import io.kotest.matchers.nulls.shouldNotBeNull
 import openapi.schema.NullableDefinition
 import openapi.schema.ReferenceDefinition
 import openapi.schema.SchemaGenerator
 import openapi.schema.TypeDefinition
+import openapi.schema.slug
 
 @Serializable
 data class DescSimpleUser(val name: String, val age: Int)
@@ -91,6 +94,22 @@ data class DescAllPrimitives(
     val f: Float,
     val b: Boolean,
 )
+
+@Serializable
+data class DescWithContextualUuid(val id: @Contextual java.util.UUID, val name: String)
+
+@Serializable
+data class DescWithContextualInstant(val createdAt: @Contextual java.time.Instant)
+
+object SlugCollisionA {
+    @Serializable
+    data class Status(val code: Int)
+}
+
+object SlugCollisionB {
+    @Serializable
+    data class Status(val message: String)
+}
 
 class SchemaGeneratorDescriptorTest : ShouldSpec({
 
@@ -291,5 +310,55 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     should("generate float for standalone Float descriptor") {
         val (schema, _) = generate(Float.serializer().descriptor)
         schema shouldBe TypeDefinition.FLOAT
+    }
+
+    should("resolve @Contextual UUID via serializersModule") {
+        val module = SerializersModule {
+            contextual(java.util.UUID::class, UUIDAsStringSerializer)
+        }
+        val customJson = Json { serializersModule = module }
+        val cache = mutableMapOf<String, JsonSchema>()
+        val schema = SchemaGenerator.fromDescriptor(
+            DescWithContextualUuid.serializer().descriptor, customJson, cache,
+        )
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        schema.properties!!["id"] shouldBe TypeDefinition.STRING
+        schema.properties!!["name"] shouldBe TypeDefinition.STRING
+    }
+
+    should("produce different slugs for same-named classes in different enclosing objects") {
+        val slugA = SlugCollisionA.Status.serializer().descriptor.slug()
+        val slugB = SlugCollisionB.Status.serializer().descriptor.slug()
+        slugA shouldBe "SlugCollisionAStatus"
+        slugB shouldBe "SlugCollisionBStatus"
+    }
+
+    should("produce different reference slugs for same-named classes") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val customJson = Json.Default
+        SchemaGenerator.fromDescriptor(SlugCollisionA.Status.serializer().descriptor, customJson, cache)
+        SchemaGenerator.fromDescriptor(SlugCollisionB.Status.serializer().descriptor, customJson, cache)
+        cache.keys.filter { it.contains("Status") }.size shouldBe 2
+    }
+
+    should("fall back to well-known UUID schema when no module serializer registered") {
+        val noContextJson = Json.Default
+        val cache = mutableMapOf<String, JsonSchema>()
+        val schema = SchemaGenerator.fromDescriptor(
+            DescWithContextualUuid.serializer().descriptor, noContextJson, cache,
+        )
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        schema.properties!!["id"] shouldBe TypeDefinition.UUID
+        schema.properties!!["name"] shouldBe TypeDefinition.STRING
+    }
+
+    should("fall back to well-known Instant schema when no module serializer registered") {
+        val noContextJson = Json.Default
+        val cache = mutableMapOf<String, JsonSchema>()
+        val schema = SchemaGenerator.fromDescriptor(
+            DescWithContextualInstant.serializer().descriptor, noContextJson, cache,
+        )
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        schema.properties!!["createdAt"] shouldBe TypeDefinition(type = "string", format = "date-time")
     }
 })
