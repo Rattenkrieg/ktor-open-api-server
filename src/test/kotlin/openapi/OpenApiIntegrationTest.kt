@@ -72,6 +72,7 @@ class OpenApiIntegrationTest : ShouldSpec({
                 )
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/users/me") {
                     get<AuthOnly, GetMeResp> {
                         GetMeResp(
@@ -139,14 +140,14 @@ class OpenApiIntegrationTest : ShouldSpec({
         }
     }
 
-    should("serve spec at custom path") {
+    should("serve spec at custom path via serveOpenApiSpec") {
         testApplication {
             install(ContentNegotiation) { json() }
             install(OpenApi) {
                 spec = openApiSpec()
-                specPath = "/api/docs/spec.json"
             }
             routing {
+                serveOpenApiSpec("/api/docs/spec.json")
                 route("/health") {
                     get<AuthOnly, NoContent> {
                         NoContent
@@ -160,12 +161,11 @@ class OpenApiIntegrationTest : ShouldSpec({
         }
     }
 
-    should("produce no spec route when specPath is null") {
+    should("not serve spec when serveOpenApiSpec is not called") {
         testApplication {
             install(ContentNegotiation) { json() }
             install(OpenApi) {
                 spec = openApiSpec()
-                specPath = null
             }
             routing {
                 route("/health") {

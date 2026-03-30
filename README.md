@@ -11,7 +11,11 @@ install(ContentNegotiation) { json(json) }
 install(OpenApi) {
     spec = OpenApiSpec(info = Info(title = "My API", version = "1.0.0"))
     json = json                  // your kotlinx.serialization Json instance
-    specPath = "/openapi.json"   // serves the spec here (null to disable)
+}
+
+routing {
+    serveOpenApiSpec("/openapi.json")  // mount wherever you want (behind auth, under a prefix, etc.)
+    // ... your routes
 }
 ```
 

@@ -39,7 +39,6 @@ val OpenApiGlobalTagsKey = AttributeKey<List<String>>("OpenApiGlobalTags")
 class OpenApiConfig {
     lateinit var spec: OpenApiSpec
     var json: Json = Json.Default
-    var specPath: String? = "/openapi.json"
     var customTypes: Map<KType, JsonSchema> = mapOf()
     var tags: List<String> = listOf()
 }
@@ -53,27 +52,6 @@ val OpenApi = createApplicationPlugin("OpenApi", ::OpenApiConfig) {
     if (pluginConfig.tags.isNotEmpty()) {
         application.attributes.put(OpenApiGlobalTagsKey, pluginConfig.tags)
     }
-    val specPath = pluginConfig.specPath ?: return@createApplicationPlugin
-    val specJson = lazy {
-        val json = Json {
-            prettyPrint = true
-            encodeDefaults = true
-            explicitNulls = false
-        }
-        json.encodeToString(OpenApiSpec.serializer(), application.attributes[OpenApiSpecKey])
-    }
-    onCallRespond { call ->
-        if (call.request.local.uri == specPath) return@onCallRespond
-    }
-    application.routing {
-        route(specPath) {
-            method(HttpMethod.Get) {
-                handle {
-                    call.respondText(specJson.value, ContentType.Application.Json)
-                }
-            }
-        }
-    }
 }
 
 fun Application.openApiSpecJson(): String {
@@ -83,6 +61,17 @@ fun Application.openApiSpecJson(): String {
         explicitNulls = false
     }
     return json.encodeToString(OpenApiSpec.serializer(), attributes[OpenApiSpecKey])
+}
+
+fun Route.serveOpenApiSpec(path: String) {
+    val specJson = lazy { application.openApiSpecJson() }
+    route(path) {
+        method(HttpMethod.Get) {
+            handle {
+                call.respondText(specJson.value, ContentType.Application.Json)
+            }
+        }
+    }
 }
 
 fun addRouteToSpec(

@@ -182,6 +182,7 @@ class TypedRoutingTest : ShouldSpec({
 
     fun openApiSpec() = OpenApiSpec(info = Info(title = "Test API", version = "1.0.0"))
 
+
     should("extract body and path param from post") {
         testApplication {
             install(ContentNegotiation) { json() }
@@ -238,6 +239,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users") {
                     post<PayloadWithHeader, UserResponse> {
                         UserResponse(
@@ -297,6 +299,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users") {
                     post<CreateUserPayload, CreatedUserDirectResponse> {
                         CreatedUserDirectResponse("1", payload.body.value().email, payload.body.value().name)
@@ -325,6 +328,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users/{id}") {
                     delete<DeleteUserPayload, NoContent> {
                         NoContent
@@ -352,6 +356,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users") {
                     post<CreateUserPayload, UserResponse> {
                         UserResponse("1", payload.body.value().email, payload.body.value().name)
@@ -395,6 +400,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users") {
                     post<CreateUserPayload, CreatedUserResponse> {
                         CreatedUserResponse(
@@ -428,6 +434,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users") {
                     post<CreateUserPayload, UserResponseWithHeader> {
                         UserResponseWithHeader(
@@ -579,6 +586,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/users/me") {
                     get<GetUsersPayload, Ok<List<UserResponse>>> {
                         Ok(listOf())
@@ -610,6 +618,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users/{id}") {
                     patch<CreateUserPayload, NoContent> {
                         NoContent
@@ -639,6 +648,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/api/v1/companies/{companyId}/users/{id}") {
                     delete<DeleteUserPayload, NoContent> {
                         NoContent
@@ -710,6 +720,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}/export") {
                     get<StreamPayload, ByteStreamResponse> {
                         ByteStreamResponse(ContentType.Application.OctetStream) {
@@ -758,6 +769,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}") {
                     get<AcceptPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
@@ -869,6 +881,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}") {
                     post<OriginPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
@@ -894,6 +907,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}/upload") {
                     post<MultipartPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
@@ -945,6 +959,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}/search") {
                     get<NamedQueryPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
@@ -977,6 +992,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}") {
                     get<RenamedHeaderPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("header" to payload.customHeader.value))
@@ -1036,6 +1052,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}/approve") {
                     post<NullableBodyPayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
@@ -1114,6 +1131,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}") {
                     get<CookiePayload, Ok<Map<String, String>>> {
                         Ok(mapOf("id" to payload.id.value))
@@ -1179,6 +1197,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}/link") {
                     get<RedirectPayload, RedirectResponse> {
                         RedirectResponse(url = "https://example.com", permanent = false)
@@ -1235,6 +1254,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}/process") {
                     post<StreamPayload, ProcessResult> {
                         ProcessResult.Success(UserResponse("1", "a@b.com", "User"))
@@ -1266,6 +1286,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}") {
                     delete<DeleteUserPayload, SimpleResult> {
                         SimpleResult.Done
@@ -1383,6 +1404,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}/external-link") {
                     get<StreamPayload, ExternalLinkResult> {
                         ExternalLinkResult.Missing
@@ -1410,6 +1432,7 @@ class TypedRoutingTest : ShouldSpec({
                 spec = openApiSpec()
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 route("/items/{id}") {
                     createChild(object : RouteSelector() {
                         override suspend fun evaluate(context: RoutingResolveContext, segmentIndex: Int) =
@@ -1443,6 +1466,7 @@ class TypedRoutingTest : ShouldSpec({
                 })
             }
             routing {
+                serveOpenApiSpec("/openapi.json")
                 authenticate("test-auth") {
                     route("/secured") {
                         get<GetUsersPayload, Ok<List<UserResponse>>> {
