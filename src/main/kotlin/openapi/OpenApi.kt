@@ -22,6 +22,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.serializer
 import openapi.schema.slug
 import openapi.schema.ArrayDefinition
+import openapi.schema.EnumDefinition
+import openapi.schema.ReferenceDefinition
+import openapi.schema.referenceSlug
 import org.slf4j.LoggerFactory
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
@@ -281,12 +284,25 @@ private fun schemaFromType(
     type: KType,
     json: Json,
     cache: MutableMap<String, JsonSchema>,
-): JsonSchema = try {
-    val serializer = json.serializersModule.serializer(type)
-    SchemaGenerator.fromDescriptor(serializer.descriptor, json, cache)
-} catch (e: Exception) {
-    logger.warn("Descriptor-based schema generation failed for {}, falling back to reflection: {}", type, e.message)
-    SchemaGenerator.fromTypeToSchema(type, cache)
+): JsonSchema {
+    val schema = try {
+        val serializer = json.serializersModule.serializer(type)
+        SchemaGenerator.fromDescriptor(serializer.descriptor, json, cache)
+    } catch (e: Exception) {
+        logger.warn(
+            "Descriptor-based schema generation failed for {}, falling back to reflection: {}",
+            type,
+            e.message,
+        )
+        SchemaGenerator.fromTypeToSchema(type, cache)
+    }
+    if (schema is TypeDefinition && schema.properties != null || schema is EnumDefinition) {
+        val serializer = json.serializersModule.serializer(type)
+        val slug = serializer.descriptor.slug()
+        cache[slug] = schema
+        return ReferenceDefinition(serializer.descriptor.referenceSlug())
+    }
+    return schema
 }
 
 private fun schemaFromTypeOrUnit(
