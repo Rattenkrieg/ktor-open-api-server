@@ -69,9 +69,9 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         cache: MutableMap<String, JsonSchema>,
     ): JsonSchema {
-        cache[descriptor.slug()] = ReferenceDefinition(descriptor.referenceSlug())
-        val options = descriptor.elementNames.toSet()
-        return EnumDefinition(enum = options)
+        val definition = EnumDefinition(enum = descriptor.elementNames.toSet())
+        cache[descriptor.slug()] = definition
+        return definition
     }
 
     private fun handleDescriptorList(
@@ -169,7 +169,13 @@ object SchemaGenerator {
             return fromDescriptor(resolved, json, cache)
         }
         val captured = descriptor.capturedKClass
-        return wellKnownContextual[captured] ?: TypeDefinition(type = "object")
+        wellKnownContextual[captured]?.let { return it }
+        if (captured != null && captured.isValue) {
+            val innerClass = captured.primaryConstructor
+                ?.parameters?.firstOrNull()?.type?.classifier as? KClass<*>
+            wellKnownContextual[innerClass]?.let { return it }
+        }
+        return TypeDefinition(type = "object")
     }
 
     private fun resolveContextual(descriptor: SerialDescriptor, json: Json): SerialDescriptor? {
@@ -490,7 +496,7 @@ fun KType.referenceSlug(): String = "$COMPONENT_SLUG/${slug()}"
 
 @OptIn(ExperimentalSerializationApi::class)
 fun SerialDescriptor.slug(): String {
-    val name = serialName
+    val name = serialName.removeSuffix("?")
     val parts = name.split('.')
     val classStart = parts.indexOfFirst { it.firstOrNull()?.isUpperCase() == true }
     return if (classStart >= 0) {

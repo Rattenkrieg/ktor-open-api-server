@@ -7,6 +7,20 @@ plugins {
 group = "io.github.rattenkrieg"
 version = "0.1.0-SNAPSHOT"
 
+sourceSets {
+    create("testOpenApi") {
+        compileClasspath += sourceSets.main.get().output + sourceSets.test.get().output
+        runtimeClasspath += sourceSets.main.get().output + sourceSets.test.get().output
+    }
+}
+
+val testOpenApiImplementation by configurations.getting {
+    extendsFrom(configurations.testImplementation.get())
+}
+val testOpenApiRuntimeOnly by configurations.getting {
+    extendsFrom(configurations.testRuntimeOnly.get())
+}
+
 dependencies {
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.auth)
@@ -17,9 +31,17 @@ dependencies {
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
+
+    testOpenApiImplementation(libs.openapi.generator)
 }
 
 tasks.test {
+    useJUnitPlatform()
+}
+
+val testOpenApi by tasks.registering(Test::class) {
+    testClassesDirs = sourceSets["testOpenApi"].output.classesDirs
+    classpath = sourceSets["testOpenApi"].runtimeClasspath
     useJUnitPlatform()
 }
 

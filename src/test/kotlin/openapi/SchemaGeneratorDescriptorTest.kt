@@ -101,6 +101,21 @@ data class DescWithContextualUuid(val id: @Contextual java.util.UUID, val name: 
 @Serializable
 data class DescWithContextualInstant(val createdAt: @Contextual java.time.Instant)
 
+@JvmInline
+value class DescModelId(val id: @Contextual java.util.UUID)
+
+@Serializable
+data class DescWithValueClassId(val id: @Contextual DescModelId, val name: String)
+
+@Serializable
+data class DescWithNullableObject(val address: DescAddress?)
+
+@Serializable
+data class DescWithListOfContextualIds(val ids: List<@Contextual java.util.UUID>)
+
+@Serializable
+data class DescWithSetOfStrings(val emails: Set<String>)
+
 object SlugCollisionA {
     @Serializable
     data class Status(val code: Int)
@@ -360,5 +375,44 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         )
         schema.shouldBeInstanceOf<TypeDefinition>()
         schema.properties!!["createdAt"] shouldBe TypeDefinition(type = "string", format = "date-time")
+    }
+
+    should("unwrap value class wrapping @Contextual UUID to string/uuid") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val schema = SchemaGenerator.fromDescriptor(
+            DescWithValueClassId.serializer().descriptor, Json.Default, cache,
+        )
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        schema.properties!!["id"] shouldBe TypeDefinition.UUID
+        schema.properties!!["name"] shouldBe TypeDefinition.STRING
+    }
+
+    should("generate array schema for List of @Contextual UUID") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val schema = SchemaGenerator.fromDescriptor(
+            DescWithListOfContextualIds.serializer().descriptor, Json.Default, cache,
+        )
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        val idsProp = schema.properties!!["ids"]
+        idsProp.shouldBeInstanceOf<ArrayDefinition>()
+        idsProp.items shouldBe TypeDefinition.UUID
+    }
+
+    should("generate array schema for Set of String") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val schema = SchemaGenerator.fromDescriptor(
+            DescWithSetOfStrings.serializer().descriptor, Json.Default, cache,
+        )
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        val emailsProp = schema.properties!!["emails"]
+        emailsProp.shouldBeInstanceOf<ArrayDefinition>()
+        emailsProp.items shouldBe TypeDefinition.STRING
+    }
+
+    should("produce slug without ? for nullable types") {
+        val descriptor = DescWithNullableObject.serializer().descriptor
+        val addressDescriptor = descriptor.getElementDescriptor(0)
+        val addressSlug = addressDescriptor.slug()
+        addressSlug.contains("?") shouldBe false
     }
 })
