@@ -6,6 +6,7 @@ import io.ktor.server.application.*
 import io.ktor.server.auth.AuthenticationRouteSelector
 import io.ktor.server.routing.RoutingNode
 import io.ktor.server.auth.*
+import io.ktor.server.plugins.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -161,7 +162,7 @@ private object MultipartBodyExtractor : ParamExtractor {
 }
 
 private object RequestOriginExtractor : ParamExtractor {
-    override suspend fun extract(call: RoutingCall) = RequestOrigin(call.request.local)
+    override suspend fun extract(call: RoutingCall) = RequestOrigin(call.request.origin)
 }
 
 class RequestPlan private constructor(

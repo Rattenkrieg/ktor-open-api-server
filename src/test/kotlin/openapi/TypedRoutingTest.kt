@@ -874,6 +874,31 @@ class TypedRoutingTest : ShouldSpec({
         }
     }
 
+    should("extract RequestOrigin honoring X-Forwarded-For when plugin installed") {
+        testApplication {
+            install(io.ktor.server.plugins.forwardedheaders.XForwardedHeaders)
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                route("/items/{id}") {
+                    post<OriginPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf(
+                            "id" to payload.id.value,
+                            "remoteHost" to payload.origin.value.remoteHost,
+                        ))
+                    }
+                }
+            }
+            val response = client.post("/items/42") {
+                header("X-Forwarded-For", "203.0.113.7")
+            }
+            response.status shouldBe HttpStatusCode.OK
+            response.bodyAsText() shouldContain "203.0.113.7"
+        }
+    }
+
     should("not include RequestOrigin in spec parameters") {
         testApplication {
             install(ContentNegotiation) { json() }
