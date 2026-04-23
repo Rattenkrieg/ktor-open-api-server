@@ -20,6 +20,7 @@ sealed interface JsonSchema {
                 is ReferenceDefinition -> ReferenceDefinition.serializer().serialize(encoder, value)
                 is TypeDefinition -> TypeDefinition.serializer().serialize(encoder, value)
                 is EnumDefinition -> EnumDefinition.serializer().serialize(encoder, value)
+                is IntEnumDefinition -> IntEnumDefinition.serializer().serialize(encoder, value)
                 is ArrayDefinition -> ArrayDefinition.serializer().serialize(encoder, value)
                 is MapDefinition -> MapDefinition.serializer().serialize(encoder, value)
                 is NullableDefinition -> NullableDefinition.serializer().serialize(encoder, value)
@@ -65,6 +66,14 @@ data class MapDefinition(
 @Serializable
 data class EnumDefinition(
     val enum: Set<String>,
+    val type: String? = null,
+) : JsonSchema
+
+@Serializable
+data class IntEnumDefinition(
+    val enum: Set<Int>,
+    val type: String = "integer",
+    val format: String = "int32",
 ) : JsonSchema
 
 @Serializable
