@@ -5,8 +5,6 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -35,24 +33,24 @@ class JsonSchemaSerializationTest : ShouldSpec({
         val schema: JsonSchema = EnumDefinition(enum = setOf("OPEN", "CLOSED"), type = "string")
         val encoded = json.encodeToString(JsonSchema.serializer(), schema)
         val parsed = json.parseToJsonElement(encoded).jsonObject
-        parsed["type"]!!.jsonPrimitive.content shouldBe "string"
-        parsed["enum"]!!.jsonArray.map { it.jsonPrimitive.content } shouldBe listOf("OPEN", "CLOSED")
+        parsed.getValue("type").jsonPrimitive.content shouldBe "string"
+        parsed.getValue("enum").jsonArray.map { it.jsonPrimitive.content } shouldBe listOf("OPEN", "CLOSED")
     }
 
     should("serialize IntEnumDefinition with integer enum and default type/format") {
         val schema: JsonSchema = IntEnumDefinition(enum = setOf(73009, 73010, 73011))
         val encoded = json.encodeToString(JsonSchema.serializer(), schema)
         val parsed = json.parseToJsonElement(encoded).jsonObject
-        parsed["type"]!!.jsonPrimitive.content shouldBe "integer"
-        parsed["format"]!!.jsonPrimitive.content shouldBe "int32"
-        parsed["enum"]!!.jsonArray.map { it.jsonPrimitive.int } shouldBe listOf(73009, 73010, 73011)
+        parsed.getValue("type").jsonPrimitive.content shouldBe "integer"
+        parsed.getValue("format").jsonPrimitive.content shouldBe "int32"
+        parsed.getValue("enum").jsonArray.map { it.jsonPrimitive.int } shouldBe listOf(73009, 73010, 73011)
     }
 
     should("serialize IntEnumDefinition with overridden type and format") {
-        val schema: JsonSchema = IntEnumDefinition(enum = setOf(1L.toInt(), 2L.toInt()), type = "integer", format = "int64")
+        val schema: JsonSchema = IntEnumDefinition(enum = setOf(1, 2), type = "integer", format = "int64")
         val encoded = json.encodeToString(JsonSchema.serializer(), schema)
         val parsed = json.parseToJsonElement(encoded).jsonObject
-        parsed["format"]!!.jsonPrimitive.content shouldBe "int64"
+        parsed.getValue("format").jsonPrimitive.content shouldBe "int64"
     }
 
     should("round-trip IntEnumDefinition through the OpenApiSpec document") {
@@ -72,13 +70,15 @@ class JsonSchemaSerializationTest : ShouldSpec({
         )
         val encoded = json.encodeToString(OpenApiSpec.serializer(), spec)
         val parsed = json.parseToJsonElement(encoded).jsonObject
-        val schemas = parsed["components"]!!.jsonObject["schemas"]!!.jsonObject
-        val errorCode = schemas["ErrorCode"]!!.jsonObject
-        errorCode["type"]!!.jsonPrimitive.content shouldBe "integer"
-        errorCode["format"]!!.jsonPrimitive.content shouldBe "int32"
-        errorCode["enum"]!!.jsonArray.map { it.jsonPrimitive.int }.toSet() shouldBe setOf(73009, 73010)
-        val appError = schemas["AppErrorJson"]!!.jsonObject
-        val ref = appError["properties"]!!.jsonObject["errorCode"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content
+        val schemas = parsed.getValue("components").jsonObject.getValue("schemas").jsonObject
+        val errorCode = schemas.getValue("ErrorCode").jsonObject
+        errorCode.getValue("type").jsonPrimitive.content shouldBe "integer"
+        errorCode.getValue("format").jsonPrimitive.content shouldBe "int32"
+        errorCode.getValue("enum").jsonArray.map { it.jsonPrimitive.int }.toSet() shouldBe setOf(73009, 73010)
+        val appError = schemas.getValue("AppErrorJson").jsonObject
+        val ref = appError.getValue("properties").jsonObject
+            .getValue("errorCode").jsonObject
+            .getValue("\$ref").jsonPrimitive.content
         ref shouldBe "#/components/schemas/ErrorCode"
     }
 
@@ -87,7 +87,7 @@ class JsonSchemaSerializationTest : ShouldSpec({
         val intSchema: JsonSchema = IntEnumDefinition(enum = setOf(1))
         val strEncoded = json.parseToJsonElement(json.encodeToString(JsonSchema.serializer(), strSchema)).jsonObject
         val intEncoded = json.parseToJsonElement(json.encodeToString(JsonSchema.serializer(), intSchema)).jsonObject
-        strEncoded["enum"]!!.jsonArray[0].jsonPrimitive.isString shouldBe true
-        intEncoded["enum"]!!.jsonArray[0].jsonPrimitive.isString shouldBe false
+        strEncoded.getValue("enum").jsonArray[0].jsonPrimitive.isString shouldBe true
+        intEncoded.getValue("enum").jsonArray[0].jsonPrimitive.isString shouldBe false
     }
 })
