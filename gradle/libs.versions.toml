@@ -1,7 +1,7 @@
 [versions]
-kotlin = "2.1.20"
-ktor = "3.1.2"
-kotest = "6.0.7"
+kotlin = "2.3.21"
+ktor = "3.5.0"
+kotest = "6.1.11"
 
 openapi-generator = "7.14.0"
 
