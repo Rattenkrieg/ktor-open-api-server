@@ -127,6 +127,28 @@ fun addRouteToSpec(
                     )
                 )
             }
+            classifier == IntQueryParam::class -> {
+                val httpName = param.findAnnotation<Name>()?.value ?: paramName
+                parameters.add(
+                    Parameter(
+                        name = httpName,
+                        `in` = Parameter.Location.query,
+                        schema = TypeDefinition.INT,
+                        required = !paramType.isMarkedNullable
+                    )
+                )
+            }
+            classifier == LongQueryParam::class -> {
+                val httpName = param.findAnnotation<Name>()?.value ?: paramName
+                parameters.add(
+                    Parameter(
+                        name = httpName,
+                        `in` = Parameter.Location.query,
+                        schema = TypeDefinition.LONG,
+                        required = !paramType.isMarkedNullable
+                    )
+                )
+            }
             classifier == QueryParamList::class -> {
                 val httpName = param.findAnnotation<Name>()?.value ?: paramName
                 parameters.add(

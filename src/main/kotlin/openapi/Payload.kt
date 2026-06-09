@@ -18,6 +18,8 @@ class Body<T : Any>(private val receiver: suspend () -> T) {
 }
 data class PathParam(override val value: String) : RequestPayloadItem<String>
 data class QueryParam(override val value: String) : RequestPayloadItem<String>
+data class IntQueryParam(val value: Int)
+data class LongQueryParam(val value: Long)
 data class QueryParamList(override val value: List<String>) : RequestPayloadItem<List<String>>
 
 @Target(AnnotationTarget.VALUE_PARAMETER)

@@ -127,6 +127,16 @@ data class CookiePayload(
     val tracking: CookieParam?,
 ) : RequestPayload
 
+data class IntQueryPayload(
+    val page: IntQueryParam,
+    val size: IntQueryParam?,
+) : RequestPayload
+
+data class LongQueryPayload(
+    val cursor: LongQueryParam,
+    val limit: LongQueryParam?,
+) : RequestPayload
+
 data class RedirectPayload(
     val id: PathParam,
 ) : RequestPayload
@@ -1551,6 +1561,84 @@ class TypedRoutingTest : ShouldSpec({
             }
         }
         exception.message shouldContain "has 2 Principal fields"
+    }
+
+    should("extract IntQueryParam and LongQueryParam from query string") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<IntQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("page" to payload.page.value.toString(), "size" to (payload.size?.value?.toString() ?: "null")))
+                    }
+                }
+            }
+            val response = client.get("/items?page=3&size=10")
+            response.status shouldBe HttpStatusCode.OK
+            val body = Json.decodeFromString<Map<String, String>>(response.bodyAsText())
+            body["page"] shouldBe "3"
+            body["size"] shouldBe "10"
+        }
+    }
+
+    should("extract nullable IntQueryParam as null when absent") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<IntQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("page" to payload.page.value.toString(), "size" to (payload.size?.value?.toString() ?: "null")))
+                    }
+                }
+            }
+            val response = client.get("/items?page=1")
+            response.status shouldBe HttpStatusCode.OK
+            val body = Json.decodeFromString<Map<String, String>>(response.bodyAsText())
+            body["size"] shouldBe "null"
+        }
+    }
+
+    should("generate spec with IntQueryParam as integer/int32 and LongQueryParam as integer/int64") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                serveOpenApiSpec("/openapi.json")
+                route("/items") {
+                    get<IntQueryPayload, Ok<Unit>> { Ok(Unit) }
+                }
+                route("/cursors") {
+                    get<LongQueryPayload, Ok<Unit>> { Ok(Unit) }
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val itemsOp = specJson["paths"]?.jsonObject?.get("/items")?.jsonObject?.get("get")?.jsonObject
+            itemsOp.shouldNotBeNull()
+            val itemsParams = itemsOp["parameters"]?.jsonArray
+            itemsParams.shouldNotBeNull()
+            val itemsParamMap = itemsParams.associate {
+                it.jsonObject["name"]?.jsonPrimitive?.content to it.jsonObject
+            }
+            itemsParamMap["page"]!!["schema"]?.jsonObject?.get("type")?.jsonPrimitive?.content shouldBe "number"
+            itemsParamMap["page"]!!["schema"]?.jsonObject?.get("format")?.jsonPrimitive?.content shouldBe "int32"
+            itemsParamMap["page"]!!["required"]?.jsonPrimitive?.content shouldBe "true"
+            itemsParamMap["size"]!!["schema"]?.jsonObject?.get("type")?.jsonPrimitive?.content shouldBe "number"
+            itemsParamMap["size"]!!["schema"]?.jsonObject?.get("format")?.jsonPrimitive?.content shouldBe "int32"
+            itemsParamMap["size"]!!["required"]?.jsonPrimitive?.content shouldBe "false"
+
+            val cursorsOp = specJson["paths"]?.jsonObject?.get("/cursors")?.jsonObject?.get("get")?.jsonObject
+            cursorsOp.shouldNotBeNull()
+            val cursorsParams = cursorsOp["parameters"]?.jsonArray
+            cursorsParams.shouldNotBeNull()
+            val cursorsParamMap = cursorsParams.associate {
+                it.jsonObject["name"]?.jsonPrimitive?.content to it.jsonObject
+            }
+            cursorsParamMap["cursor"]!!["schema"]?.jsonObject?.get("type")?.jsonPrimitive?.content shouldBe "number"
+            cursorsParamMap["cursor"]!!["schema"]?.jsonObject?.get("format")?.jsonPrimitive?.content shouldBe "int64"
+            cursorsParamMap["limit"]!!["schema"]?.jsonObject?.get("format")?.jsonPrimitive?.content shouldBe "int64"
+        }
     }
 
     should("serialize direct @Serializable response payload with data properties") {

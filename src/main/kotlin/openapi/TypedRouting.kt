@@ -120,6 +120,18 @@ private class QueryParamExtractor(val httpName: String, val nullable: Boolean) :
         else QueryParam(call.queryParameters[httpName] ?: error("Missing query parameter: $httpName"))
 }
 
+private class IntQueryParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
+    override suspend fun extract(call: RoutingCall) =
+        if (nullable) call.queryParameters[httpName]?.let { IntQueryParam(it.toInt()) }
+        else IntQueryParam((call.queryParameters[httpName] ?: error("Missing query parameter: $httpName")).toInt())
+}
+
+private class LongQueryParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
+    override suspend fun extract(call: RoutingCall) =
+        if (nullable) call.queryParameters[httpName]?.let { LongQueryParam(it.toLong()) }
+        else LongQueryParam((call.queryParameters[httpName] ?: error("Missing query parameter: $httpName")).toLong())
+}
+
 private class QueryParamListExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
     override suspend fun extract(call: RoutingCall): Any? {
         val values = call.queryParameters.getAll(httpName)
@@ -207,6 +219,14 @@ class RequestPlan private constructor(
                         val httpName = param.findAnnotation<Name>()?.value ?: paramName
                         QueryParamExtractor(httpName, nullable)
                     }
+                    classifier == IntQueryParam::class -> {
+                        val httpName = param.findAnnotation<Name>()?.value ?: paramName
+                        IntQueryParamExtractor(httpName, nullable)
+                    }
+                    classifier == LongQueryParam::class -> {
+                        val httpName = param.findAnnotation<Name>()?.value ?: paramName
+                        LongQueryParamExtractor(httpName, nullable)
+                    }
                     classifier == QueryParamList::class -> {
                         val httpName = param.findAnnotation<Name>()?.value ?: paramName
                         QueryParamListExtractor(httpName, nullable)
@@ -229,7 +249,7 @@ class RequestPlan private constructor(
                     }
                     else -> error(
                         "Payload property '$paramName' must be a RequestPayloadItem type " +
-                            "(Body, PathParam, QueryParam, QueryParamList, HeaderParam, CookieParam, " +
+                            "(Body, PathParam, QueryParam, IntQueryParam, LongQueryParam, QueryParamList, HeaderParam, CookieParam, " +
                             "Principal, AcceptHeader, MultipartBody, RequestOrigin), " +
                             "got: ${classifier.simpleName}"
                     )
