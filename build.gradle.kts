@@ -46,13 +46,19 @@ val testOpenApi by tasks.registering(Test::class) {
     useJUnitPlatform()
 }
 
+// the generator round trip is the only coverage of the produced spec, so check must run it:
+// otherwise a build passes while an openapi-generator bump breaks generation
+tasks.check {
+    dependsOn(testOpenApi)
+}
+
 
 kotlin {
     jvmToolchain(21)
 }
 
 mavenPublishing {
-    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublications()
 
     coordinates(group.toString(), "ktor-open-api-server", version.toString())
