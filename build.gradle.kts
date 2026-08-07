@@ -52,7 +52,7 @@ kotlin {
 }
 
 mavenPublishing {
-    publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublications()
 
     coordinates(group.toString(), "ktor-open-api-server", version.toString())

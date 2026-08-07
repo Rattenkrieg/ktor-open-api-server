@@ -1,9 +1,9 @@
 [versions]
-kotlin = "2.3.21"
-ktor = "3.5.0"
-kotest = "6.1.11"
+kotlin = "2.4.10"
+ktor = "3.5.2"
+kotest = "6.2.3"
 
-openapi-generator = "7.14.0"
+openapi-generator = "7.24.0"
 
 [libraries]
 openapi-generator = { module = "org.openapitools:openapi-generator", version.ref = "openapi-generator" }
@@ -21,4 +21,4 @@ kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-maven-publish = { id = "com.vanniktech.maven.publish", version = "0.30.0" }
+maven-publish = { id = "com.vanniktech.maven.publish", version = "0.37.0" }
