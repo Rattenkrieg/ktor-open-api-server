@@ -1,6 +1,7 @@
 package openapi
 
 import io.kotest.core.spec.style.ShouldSpec
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.serialization.Contextual
@@ -61,6 +62,17 @@ sealed interface DescShape {
     @Serializable
     @SerialName("rectangle")
     data class Rectangle(val width: Double, val height: Double) : DescShape
+}
+
+@Serializable
+sealed interface DescOutcome {
+    @Serializable
+    @SerialName("succeeded")
+    data class Succeeded(val at: String) : DescOutcome
+
+    @Serializable
+    @SerialName("cancelled")
+    data object Cancelled : DescOutcome
 }
 
 @Serializable
@@ -260,6 +272,28 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         // Each variant should have a "type" discriminator in cache
         val objectSchemas = cache.values.filterIsInstance<TypeDefinition>().filter { it.type == "object" }
         objectSchemas.any { it.properties?.containsKey("type") == true } shouldBe true
+    }
+
+    should("give every sealed variant a discriminator, including one with no properties") {
+        val (schema, cache) = generate(DescOutcome.serializer().descriptor)
+        schema.shouldBeInstanceOf<AnyOfDefinition>()
+        schema.anyOf.size shouldBe 2
+
+        val variants = schema.anyOf.map { member ->
+            member.shouldBeInstanceOf<ReferenceDefinition>()
+            val name = member.`$ref`.removePrefix("#/components/schemas/")
+            val cached = cache[name]
+            cached.shouldBeInstanceOf<TypeDefinition>()
+            name to cached
+        }
+
+        variants.forEach { (name, definition) ->
+            withClue(name) {
+                definition.properties?.get("type") shouldBe EnumDefinition(enum = setOf(name))
+                definition.required?.contains("type") shouldBe true
+            }
+        }
+        variants.map { it.first }.toSet() shouldBe setOf("succeeded", "cancelled")
     }
 
     should("generate schema for contextual type with custom serializer module") {

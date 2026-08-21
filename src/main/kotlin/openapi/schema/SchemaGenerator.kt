@@ -227,8 +227,9 @@ object SchemaGenerator {
     ): JsonSchema {
         if (schema is TypeDefinition && schema.type == "object") {
             return schema.copy(
-                required = schema.required?.plus("type"),
-                properties = schema.properties?.plus("type" to EnumDefinition(enum = setOf(descriptor.serialName))),
+                required = schema.required.orEmpty() + "type",
+                properties = schema.properties.orEmpty() +
+                    ("type" to EnumDefinition(enum = setOf(descriptor.serialName))),
             )
         }
         return schema
@@ -358,8 +359,8 @@ object SchemaGenerator {
             val qualifier = clazz.annotations.filterIsInstance<SerialName>().firstOrNull()?.value
                 ?: clazz.qualifiedName!!
             return schema.copy(
-                required = schema.required?.plus("type"),
-                properties = schema.properties?.plus("type" to EnumDefinition(enum = setOf(qualifier))),
+                required = schema.required.orEmpty() + "type",
+                properties = schema.properties.orEmpty() + ("type" to EnumDefinition(enum = setOf(qualifier))),
             )
         }
         return schema
