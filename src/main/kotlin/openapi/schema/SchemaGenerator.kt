@@ -520,13 +520,15 @@ private const val COMPONENT_SLUG = "#/components/schemas"
 value class SchemaSlug(val value: String)
 
 /**
- * Identifies "the same class" for slug collision detection: `KClass.qualifiedName` when
- * available, otherwise the `SerialDescriptor` itself. A descriptor is safe as a fallback because
- * kotlinx.serialization caches one instance per class, so two different classes are never
- * `equals` — even sharing an explicit @SerialName override, unlike a name string comparison.
+ * Identifies "the same class" for slug collision detection: by `KClass.qualifiedName` when
+ * available, otherwise by the `SerialDescriptor` itself. A descriptor is safe as a fallback
+ * because kotlinx.serialization caches one instance per class, so two different classes are
+ * never `equals` — even sharing an explicit @SerialName override, unlike a name string comparison.
  */
-@JvmInline
-value class ClassIdentity(val value: Any)
+sealed class ClassIdentity {
+    data class ByQualifiedName(val name: String) : ClassIdentity()
+    data class ByDescriptor(val descriptor: SerialDescriptor) : ClassIdentity()
+}
 
 private fun resolveSlug(
     shortSlug: String,
@@ -569,7 +571,7 @@ fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mu
         parts.last()
     }
     val qualifiedName = capturedKClass?.qualifiedName
-    val identity = ClassIdentity(qualifiedName ?: this)
+    val identity = qualifiedName?.let { ClassIdentity.ByQualifiedName(it) } ?: ClassIdentity.ByDescriptor(this)
     return resolveSlug(shortSlug, identity, slugOwners) {
         // No naming info left when @SerialName was overridden to exactly the colliding short form.
         val qualified = qualifiedName ?: name.takeIf { it != shortSlug }
@@ -586,5 +588,5 @@ private fun KClass<*>.schemaSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentit
     if (java.packageName == "java.util") return simpleName!!
     val qualifiedName = qualifiedName ?: return simpleName!!
     val shortSlug = qualifiedName.replace(java.packageName, "").replace(".", "")
-    return resolveSlug(shortSlug, ClassIdentity(qualifiedName), slugOwners) { qualifiedName.replace(".", "") }
+    return resolveSlug(shortSlug, ClassIdentity.ByQualifiedName(qualifiedName), slugOwners) { qualifiedName.replace(".", "") }
 }
