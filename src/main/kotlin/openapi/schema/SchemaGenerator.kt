@@ -45,7 +45,13 @@ object SchemaGenerator {
             val inner = descriptor.getElementDescriptor(0)
             return fromDescriptor(inner, json, cache, slugOwners)
         }
-        val slug = descriptor.slug(slugOwners)
+        // Only object/enum kinds cache themselves below; every other kind's lookup here only
+        // ever picks up an externally-installed override (e.g. customTypes), so it's safe to
+        // use the plain, non-disambiguated slug.
+        val selfCaching = descriptor.kind == SerialKind.ENUM ||
+            descriptor.kind == StructureKind.CLASS ||
+            descriptor.kind == StructureKind.OBJECT
+        val slug = if (selfCaching) descriptor.slug(slugOwners) else descriptor.plainSlug()
         cache[slug]?.let { return it }
         return when (descriptor.kind) {
             PrimitiveKind.STRING -> TypeDefinition.STRING
@@ -522,10 +528,8 @@ value class SchemaSlug(val value: String)
 /**
  * Identifies "the same class" for slug collision detection: by `KClass.qualifiedName` when
  * available, otherwise by the descriptor's own shape (kind + element names). Shape, not the
- * `SerialDescriptor` itself, is the fallback because hand-built descriptors (e.g. a custom
- * `KSerializer` using `buildClassSerialDescriptor`) can fail `equals` against themselves once
- * nested element descriptors are involved, even for the same real class — shape sidesteps that
- * by only ever looking at this descriptor's own kind and element names.
+ * `SerialDescriptor` itself, because a hand-built descriptor's `equals` can fail against itself
+ * once nested element descriptors are involved, even for the same real class.
  */
 sealed class ClassIdentity {
     data class ByQualifiedName(val name: String) : ClassIdentity()
@@ -545,8 +549,11 @@ private fun resolveSlug(
         return shortSlug
     }
     if (owner == identity) return shortSlug
+    // Reuse this identity's previously-assigned disambiguated slug, if any, instead of
+    // recomputing a fresh one on every repeated collision.
+    slugOwners.entries.firstOrNull { it.value == identity }?.let { return it.key.value }
     val disambiguated = longSlug()
-    slugOwners.putIfAbsent(SchemaSlug(disambiguated), identity)
+    slugOwners[SchemaSlug(disambiguated)] = identity
     return disambiguated
 }
 
@@ -562,22 +569,22 @@ fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf(
 fun KType.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String =
     "$COMPONENT_SLUG/${slug(slugOwners)}"
 
-@OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String {
+private fun SerialDescriptor.shortSlugParts(): List<String> {
     val name = serialName.removeSuffix("?")
     val parts = name.split('.')
     val classStart = parts.indexOfFirst { it.firstOrNull()?.isUpperCase() == true }
-    val shortSlug = if (classStart >= 0) {
-        parts.subList(classStart, parts.size).joinToString("")
-    } else {
-        parts.last()
-    }
-    // capturedKClass is unreliable (empirically always null for plain classes with this
-    // kotlinx.serialization version), but the un-shortened serialName is already a fully
-    // qualified name unless @SerialName overrode it to exactly the colliding short form — in
-    // which case there's no naming info left at all, and only then do we fall back to shape.
-    // Preferring the string here also keeps this path's identity consistent with the reflection
-    // path's (KClass.schemaSlug()) for the same real class.
+    return if (classStart >= 0) parts.subList(classStart, parts.size) else listOf(parts.last())
+}
+
+@OptIn(ExperimentalSerializationApi::class)
+fun SerialDescriptor.plainSlug(): String = shortSlugParts().joinToString("")
+
+@OptIn(ExperimentalSerializationApi::class)
+fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String {
+    val name = serialName.removeSuffix("?")
+    val shortSlug = shortSlugParts().joinToString("")
+    // capturedKClass is usually null; the un-shortened serialName is a fully qualified name
+    // unless @SerialName overrode it to exactly the colliding short form.
     val qualifiedName = capturedKClass?.qualifiedName ?: name.takeIf { it != shortSlug }
     val identity = qualifiedName?.let { ClassIdentity.ByQualifiedName(it) }
         ?: ClassIdentity.ByShape(kind.toString(), (0 until elementsCount).map { getElementName(it) })
