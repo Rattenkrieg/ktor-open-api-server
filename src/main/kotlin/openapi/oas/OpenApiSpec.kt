@@ -2,6 +2,9 @@
 package openapi.oas
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
+import openapi.schema.ClassIdentity
+import openapi.schema.SchemaSlug
 
 @Serializable
 data class OpenApiSpec(
@@ -31,7 +34,11 @@ data class Server(
 data class Components(
     val schemas: MutableMap<String, openapi.schema.JsonSchema> = mutableMapOf(),
     val securitySchemes: MutableMap<String, SecurityScheme> = mutableMapOf(),
-)
+) {
+    // Prevents two distinct classes sharing a simple name from shadowing each other in `schemas`.
+    @Transient
+    val schemaSlugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()
+}
 
 @Serializable
 data class SecurityScheme(

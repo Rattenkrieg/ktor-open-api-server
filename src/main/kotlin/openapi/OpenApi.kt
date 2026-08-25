@@ -9,8 +9,10 @@ import openapi.oas.Parameter
 import openapi.oas.Request
 import openapi.oas.Response
 import openapi.oas.Header
+import openapi.schema.ClassIdentity
 import openapi.schema.JsonSchema
 import openapi.schema.SchemaGenerator
+import openapi.schema.SchemaSlug
 import openapi.schema.TypeDefinition
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -48,7 +50,7 @@ class OpenApiConfig {
 
 val OpenApi = createApplicationPlugin("OpenApi", ::OpenApiConfig) {
     pluginConfig.customTypes.forEach { (type, schema) ->
-        pluginConfig.spec.components.schemas[type.slug()] = schema
+        pluginConfig.spec.components.schemas[type.slug(pluginConfig.spec.components.schemaSlugOwners)] = schema
     }
     application.attributes.put(OpenApiSpecKey, pluginConfig.spec)
     application.attributes.put(OpenApiJsonKey, pluginConfig.json)
@@ -88,6 +90,7 @@ fun addRouteToSpec(
     json: Json = Json.Default,
 ) {
     val cache = spec.components.schemas
+    val slugOwners = spec.components.schemaSlugOwners
     val payloadClass = payloadType.classifier as KClass<*>
     val constructor = payloadClass.primaryConstructor
     val parameters = mutableListOf<Parameter>()
@@ -99,7 +102,7 @@ fun addRouteToSpec(
         when {
             classifier.isSubclassOf(Body::class) -> {
                 val bodyType = paramType.arguments[0].type!!
-                val schema = schemaFromType(bodyType, json, cache)
+                val schema = schemaFromType(bodyType, json, cache, slugOwners)
                 requestBody = Request(
                     description = null,
                     content = mapOf("application/json" to MediaType(schema = schema)),
@@ -186,7 +189,7 @@ fun addRouteToSpec(
             classifier == CookieParam::class -> {}
         }
     }
-    val responses = buildResponsePayloadSpec(responseType, cache, json)
+    val responses = buildResponsePayloadSpec(responseType, cache, slugOwners, json)
     val operation = PathOperation(
         tags = tags,
         parameters = parameters.ifEmpty { null },
@@ -207,6 +210,7 @@ fun addRouteToSpec(
 fun buildResponsePayloadSpec(
     responseType: KType,
     cache: MutableMap<String, JsonSchema>,
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     json: Json = Json.Default,
 ): MutableMap<Int, Response> {
     val responseClass = responseType.classifier as KClass<*>
@@ -214,12 +218,12 @@ fun buildResponsePayloadSpec(
         val responses = mutableMapOf<Int, Response>()
         for (subclass in responseClass.sealedSubclasses) {
             val subType = resolveSubclassType(subclass)
-            val subResponses = buildSingleResponseSpec(subclass, subType, cache, json)
+            val subResponses = buildSingleResponseSpec(subclass, subType, cache, slugOwners, json)
             responses.putAll(subResponses)
         }
         return responses
     }
-    return buildSingleResponseSpec(responseClass, responseType, cache, json)
+    return buildSingleResponseSpec(responseClass, responseType, cache, slugOwners, json)
 }
 
 private fun resolveSubclassType(
@@ -232,6 +236,7 @@ private fun buildSingleResponseSpec(
     responseClass: KClass<*>,
     responseType: KType,
     cache: MutableMap<String, JsonSchema>,
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     json: Json = Json.Default,
 ): MutableMap<Int, Response> {
     if (responseClass.isSubclassOf(StreamResponsePayload::class)) {
@@ -261,7 +266,7 @@ private fun buildSingleResponseSpec(
                 } else {
                     bodyTypeArg
                 }
-                bodySchema = schemaFromTypeOrUnit(resolvedBodyType, json, cache)
+                bodySchema = schemaFromTypeOrUnit(resolvedBodyType, json, cache, slugOwners)
             }
             classifier == ResponseHeader::class -> {
                 responseHeaders[paramName] = Header(
@@ -273,7 +278,7 @@ private fun buildSingleResponseSpec(
         }
     }
     if (!hasResponseBody && hasDataProperties) {
-        bodySchema = schemaFromType(responseType, json, cache)
+        bodySchema = schemaFromType(responseType, json, cache, slugOwners)
     }
     return mutableMapOf(
         resolvedStatusCode.value to Response(
@@ -306,23 +311,24 @@ private fun schemaFromType(
     type: KType,
     json: Json,
     cache: MutableMap<String, JsonSchema>,
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
 ): JsonSchema {
     val schema = try {
         val serializer = json.serializersModule.serializer(type)
-        SchemaGenerator.fromDescriptor(serializer.descriptor, json, cache)
+        SchemaGenerator.fromDescriptor(serializer.descriptor, json, cache, slugOwners)
     } catch (e: Exception) {
         logger.warn(
             "Descriptor-based schema generation failed for {}, falling back to reflection: {}",
             type,
             e.message,
         )
-        SchemaGenerator.fromTypeToSchema(type, cache)
+        SchemaGenerator.fromTypeToSchema(type, cache, slugOwners)
     }
     if (schema is TypeDefinition && schema.properties != null || schema is EnumDefinition) {
         val serializer = json.serializersModule.serializer(type)
-        val slug = serializer.descriptor.slug()
+        val slug = serializer.descriptor.slug(slugOwners)
         cache[slug] = schema
-        return ReferenceDefinition(serializer.descriptor.referenceSlug())
+        return ReferenceDefinition(serializer.descriptor.referenceSlug(slugOwners))
     }
     return schema
 }
@@ -331,7 +337,8 @@ private fun schemaFromTypeOrUnit(
     type: KType,
     json: Json,
     cache: MutableMap<String, JsonSchema>,
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
 ): JsonSchema? = when (type.classifier as KClass<*>) {
     Unit::class -> null
-    else -> schemaFromType(type, json, cache)
+    else -> schemaFromType(type, json, cache, slugOwners)
 }
