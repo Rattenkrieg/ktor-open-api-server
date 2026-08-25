@@ -13,6 +13,8 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.descriptors.element
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
@@ -151,6 +153,35 @@ data class DescTwoRefsToSameType(val first: DescSimpleUser, val second: DescSimp
 
 @Serializable
 data class DescWithCollidingStatuses(val one: PkgOneStatus, val two: PkgTwoStatus)
+
+@Serializable(with = DescCustomCountry.CountrySerializer::class)
+data class DescCustomCountry(val code: String) {
+    object CountrySerializer : KSerializer<DescCustomCountry> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("DescCustomCountry") {
+            element<String>("code")
+        }
+        override fun serialize(encoder: Encoder, value: DescCustomCountry): Unit = TODO("not used in test")
+        override fun deserialize(decoder: Decoder): DescCustomCountry = TODO("not used in test")
+    }
+}
+
+@Serializable(with = DescCustomAddress.AddressSerializer::class)
+data class DescCustomAddress(val city: String, val country: DescCustomCountry) {
+    object AddressSerializer : KSerializer<DescCustomAddress> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("DescCustomAddress") {
+            element<String>("city")
+            element<DescCustomCountry>("country")
+        }
+        override fun serialize(encoder: Encoder, value: DescCustomAddress): Unit = TODO("not used in test")
+        override fun deserialize(decoder: Decoder): DescCustomAddress = TODO("not used in test")
+    }
+}
+
+@Serializable
+data class DescHolderWithCustomAddressOne(val address: DescCustomAddress?)
+
+@Serializable
+data class DescHolderWithCustomAddressTwo(val address: DescCustomAddress?)
 
 class SchemaGeneratorDescriptorTest : ShouldSpec({
 
@@ -487,6 +518,24 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         schemaTwo.shouldBeInstanceOf<TypeDefinition>()
         schemaOne.properties!!.keys shouldBe setOf("code")
         schemaTwo.properties!!.keys shouldBe setOf("message")
+    }
+
+    should("reuse the same slug for a custom-serializer-backed type reached from two different holders") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val customJson = Json.Default
+        SchemaGenerator.fromDescriptor(
+            DescHolderWithCustomAddressOne.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        SchemaGenerator.fromDescriptor(
+            DescHolderWithCustomAddressTwo.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        // DescCustomAddress has no capturedKClass (a hand-built buildClassSerialDescriptor) and
+        // its own hardcoded serialName, plus a nested element that's also custom-serialized.
+        // That combination previously broke object-identity-based fallback matching, fragmenting
+        // one real type into a new schema entry per holder that references it.
+        cache.keys.filter { it.contains("DescCustomAddress") }.size shouldBe 1
+        cache.keys.filter { it.contains("DescCustomCountry") }.size shouldBe 1
     }
 
     should("fall back to well-known UUID schema when no module serializer registered") {
