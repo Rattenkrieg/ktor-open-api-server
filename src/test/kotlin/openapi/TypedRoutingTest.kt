@@ -1696,14 +1696,12 @@ class TypedRoutingTest : ShouldSpec({
             val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
             val schemas = specJson["components"]?.jsonObject?.get("schemas")?.jsonObject
             schemas.shouldNotBeNull()
-            val oneOp = specJson["paths"]?.jsonObject?.get("/pkg-one/status")?.jsonObject?.get("get")?.jsonObject
-            val twoOp = specJson["paths"]?.jsonObject?.get("/pkg-two/status")?.jsonObject?.get("get")?.jsonObject
-            val oneRef = oneOp?.get("responses")?.jsonObject?.get("200")?.jsonObject
+            fun okResponseRef(path: String): String? = specJson["paths"]?.jsonObject?.get(path)?.jsonObject
+                ?.get("get")?.jsonObject?.get("responses")?.jsonObject?.get("200")?.jsonObject
                 ?.get("content")?.jsonObject?.get("application/json")?.jsonObject
                 ?.get("schema")?.jsonObject?.get("\$ref")?.jsonPrimitive?.content
-            val twoRef = twoOp?.get("responses")?.jsonObject?.get("200")?.jsonObject
-                ?.get("content")?.jsonObject?.get("application/json")?.jsonObject
-                ?.get("schema")?.jsonObject?.get("\$ref")?.jsonPrimitive?.content
+            val oneRef = okResponseRef("/pkg-one/status")
+            val twoRef = okResponseRef("/pkg-two/status")
             oneRef.shouldNotBeNull()
             twoRef.shouldNotBeNull()
             oneRef shouldNotBe twoRef

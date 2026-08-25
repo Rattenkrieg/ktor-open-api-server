@@ -569,20 +569,19 @@ fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf(
 fun KType.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String =
     "$COMPONENT_SLUG/${slug(slugOwners)}"
 
-private fun SerialDescriptor.shortSlugParts(): List<String> {
-    val name = serialName.removeSuffix("?")
+private fun shortSlugParts(name: String): List<String> {
     val parts = name.split('.')
     val classStart = parts.indexOfFirst { it.firstOrNull()?.isUpperCase() == true }
     return if (classStart >= 0) parts.subList(classStart, parts.size) else listOf(parts.last())
 }
 
 @OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.plainSlug(): String = shortSlugParts().joinToString("")
+fun SerialDescriptor.plainSlug(): String = shortSlugParts(serialName.removeSuffix("?")).joinToString("")
 
 @OptIn(ExperimentalSerializationApi::class)
 fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String {
     val name = serialName.removeSuffix("?")
-    val shortSlug = shortSlugParts().joinToString("")
+    val shortSlug = shortSlugParts(name).joinToString("")
     // capturedKClass is usually null; the un-shortened serialName is a fully qualified name
     // unless @SerialName overrode it to exactly the colliding short form.
     val qualifiedName = capturedKClass?.qualifiedName ?: name.takeIf { it != shortSlug }
@@ -598,9 +597,9 @@ fun SerialDescriptor.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdent
     "$COMPONENT_SLUG/${slug(slugOwners)}"
 
 private fun KClass<*>.schemaSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String {
-    if (java.packageName == "java.lang") return simpleName!!
-    if (java.packageName == "java.util") return simpleName!!
+    val pkg = java.packageName
+    if (pkg == "java.lang" || pkg == "java.util") return simpleName!!
     val qualifiedName = qualifiedName ?: return simpleName!!
-    val shortSlug = qualifiedName.replace(java.packageName, "").replace(".", "")
+    val shortSlug = qualifiedName.replace(pkg, "").replace(".", "")
     return resolveSlug(shortSlug, ClassIdentity.ByQualifiedName(qualifiedName), slugOwners) { qualifiedName.replace(".", "") }
 }
