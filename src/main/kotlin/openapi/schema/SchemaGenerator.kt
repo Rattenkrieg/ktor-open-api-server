@@ -39,7 +39,7 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         json: Json,
         cache: MutableMap<String, JsonSchema>,
-        slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf(),
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         if (descriptor.isInline) {
             val inner = descriptor.getElementDescriptor(0)
@@ -253,7 +253,7 @@ object SchemaGenerator {
     fun fromTypeToSchema(
         type: KType,
         cache: MutableMap<String, JsonSchema>,
-        slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf(),
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         val slug = type.slug(slugOwners)
         cache[slug]?.let { return it }
@@ -557,7 +557,7 @@ private fun resolveSlug(
     return disambiguated
 }
 
-fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String = when {
+fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String = when {
     arguments.isNotEmpty() -> {
         val clazz = classifier as KClass<*>
         val classNames = arguments.map { (it.type?.classifier as? KClass<*>)?.schemaSlug(slugOwners) ?: "Any" }
@@ -566,7 +566,7 @@ fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf(
     else -> (classifier as KClass<*>).schemaSlug(slugOwners)
 }
 
-fun KType.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String =
+fun KType.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
     "$COMPONENT_SLUG/${slug(slugOwners)}"
 
 private fun shortSlugParts(name: String): List<String> {
@@ -579,7 +579,7 @@ private fun shortSlugParts(name: String): List<String> {
 fun SerialDescriptor.plainSlug(): String = shortSlugParts(serialName.removeSuffix("?")).joinToString("")
 
 @OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String {
+fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String {
     val name = serialName.removeSuffix("?")
     val shortSlug = shortSlugParts(name).joinToString("")
     // capturedKClass is usually null; the un-shortened serialName is a fully qualified name
@@ -593,7 +593,7 @@ fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mu
 }
 
 @OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity> = mutableMapOf()): String =
+fun SerialDescriptor.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
     "$COMPONENT_SLUG/${slug(slugOwners)}"
 
 private fun KClass<*>.schemaSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String {
