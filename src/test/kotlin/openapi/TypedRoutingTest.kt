@@ -6,6 +6,7 @@ import io.kotest.core.spec.style.ShouldSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.*
@@ -22,6 +23,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import openapi.fixtures.pkgone.Status as PkgOneStatus
+import openapi.fixtures.pkgtwo.Status as PkgTwoStatus
 
 @Serializable
 data class UserData(val email: String, val name: String)
@@ -1660,6 +1663,52 @@ class TypedRoutingTest : ShouldSpec({
             body.id shouldBe "1"
             body.email shouldBe "a@b.com"
             body.name shouldBe "User1"
+        }
+    }
+
+    should("keep response schemas distinct for same-named classes registered on separate routes") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                serveOpenApiSpec("/openapi.json")
+                route("/pkg-one/status") {
+                    get<IntQueryPayload, Ok<PkgOneStatus>> {
+                        Ok(PkgOneStatus(code = payload.page.value))
+                    }
+                }
+                route("/pkg-two/status") {
+                    get<IntQueryPayload, Ok<PkgTwoStatus>> {
+                        Ok(PkgTwoStatus(message = "page-${payload.page.value}"))
+                    }
+                }
+            }
+            val responseOne = client.get("/pkg-one/status?page=1")
+            responseOne.status shouldBe HttpStatusCode.OK
+            Json.decodeFromString<PkgOneStatus>(responseOne.bodyAsText()).code shouldBe 1
+
+            val responseTwo = client.get("/pkg-two/status?page=2")
+            responseTwo.status shouldBe HttpStatusCode.OK
+            Json.decodeFromString<PkgTwoStatus>(responseTwo.bodyAsText()).message shouldBe "page-2"
+
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val schemas = specJson["components"]?.jsonObject?.get("schemas")?.jsonObject
+            schemas.shouldNotBeNull()
+            fun okResponseRef(path: String): String? = specJson["paths"]?.jsonObject?.get(path)?.jsonObject
+                ?.get("get")?.jsonObject?.get("responses")?.jsonObject?.get("200")?.jsonObject
+                ?.get("content")?.jsonObject?.get("application/json")?.jsonObject
+                ?.get("schema")?.jsonObject?.get("\$ref")?.jsonPrimitive?.content
+            val oneRef = okResponseRef("/pkg-one/status")
+            val twoRef = okResponseRef("/pkg-two/status")
+            oneRef.shouldNotBeNull()
+            twoRef.shouldNotBeNull()
+            oneRef shouldNotBe twoRef
+            val oneSlug = oneRef.removePrefix("#/components/schemas/")
+            val twoSlug = twoRef.removePrefix("#/components/schemas/")
+            schemas[oneSlug]?.jsonObject?.get("properties")?.jsonObject?.keys shouldBe setOf("code")
+            schemas[twoSlug]?.jsonObject?.get("properties")?.jsonObject?.keys shouldBe setOf("message")
         }
     }
 })

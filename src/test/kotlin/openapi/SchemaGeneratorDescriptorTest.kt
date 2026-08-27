@@ -3,6 +3,7 @@ package openapi
 import io.kotest.core.spec.style.ShouldSpec
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.serialization.Contextual
 import kotlinx.serialization.KSerializer
@@ -12,10 +13,14 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.descriptors.element
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.contextual
+import kotlin.reflect.typeOf
 import openapi.schema.AnyOfDefinition
 import openapi.schema.ArrayDefinition
 import openapi.schema.EnumDefinition
@@ -25,9 +30,15 @@ import openapi.schema.OneOfDefinition
 import io.kotest.matchers.nulls.shouldNotBeNull
 import openapi.schema.NullableDefinition
 import openapi.schema.ReferenceDefinition
+import openapi.schema.ClassIdentity
 import openapi.schema.SchemaGenerator
+import openapi.schema.SchemaSlug
 import openapi.schema.TypeDefinition
 import openapi.schema.slug
+import openapi.fixtures.pkgone.Status as PkgOneStatus
+import openapi.fixtures.pkgtwo.Status as PkgTwoStatus
+import openapi.fixtures.pkgone.SharedName as SharedNameOne
+import openapi.fixtures.pkgtwo.SharedName as SharedNameTwo
 
 @Serializable
 data class DescSimpleUser(val name: String, val age: Int)
@@ -138,13 +149,57 @@ object SlugCollisionB {
     data class Status(val message: String)
 }
 
+@Serializable
+data class DescTwoRefsToSameType(val first: DescSimpleUser, val second: DescSimpleUser)
+
+@Serializable
+data class DescWithCollidingStatuses(val one: PkgOneStatus, val two: PkgTwoStatus)
+
+@Serializable(with = DescCustomCountry.CountrySerializer::class)
+data class DescCustomCountry(val code: String) {
+    object CountrySerializer : KSerializer<DescCustomCountry> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("DescCustomCountry") {
+            element<String>("code")
+        }
+        override fun serialize(encoder: Encoder, value: DescCustomCountry): Unit = TODO("not used in test")
+        override fun deserialize(decoder: Decoder): DescCustomCountry = TODO("not used in test")
+    }
+}
+
+@Serializable(with = DescCustomAddress.AddressSerializer::class)
+data class DescCustomAddress(val city: String, val country: DescCustomCountry) {
+    object AddressSerializer : KSerializer<DescCustomAddress> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("DescCustomAddress") {
+            element<String>("city")
+            element<DescCustomCountry>("country")
+        }
+        override fun serialize(encoder: Encoder, value: DescCustomAddress): Unit = TODO("not used in test")
+        override fun deserialize(decoder: Decoder): DescCustomAddress = TODO("not used in test")
+    }
+}
+
+@Serializable
+data class DescHolderWithCustomAddressOne(val address: DescCustomAddress?)
+
+@Serializable
+data class DescHolderWithCustomAddressTwo(val address: DescCustomAddress?)
+
+object DescCustomInstantSerializer : KSerializer<java.time.Instant> {
+    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("Instant", PrimitiveKind.STRING)
+    override fun serialize(encoder: Encoder, value: java.time.Instant) = TODO("not used in test")
+    override fun deserialize(decoder: Decoder): java.time.Instant = TODO("not used in test")
+}
+
+@Serializable
+data class DescWithContextualInstantField(val createdAt: @Contextual java.time.Instant)
+
 class SchemaGeneratorDescriptorTest : ShouldSpec({
 
     val json = Json.Default
 
     fun generate(descriptor: SerialDescriptor): Pair<JsonSchema, MutableMap<String, JsonSchema>> {
         val cache = mutableMapOf<String, JsonSchema>()
-        val schema = SchemaGenerator.fromDescriptor(descriptor, json, cache)
+        val schema = SchemaGenerator.fromDescriptor(descriptor, json, cache, mutableMapOf())
         return schema to cache
     }
 
@@ -306,7 +361,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         data class WithUuid(@Serializable(with = UUIDAsStringSerializer::class) val id: java.util.UUID)
 
         val cache = mutableMapOf<String, JsonSchema>()
-        val schema = SchemaGenerator.fromDescriptor(WithUuid.serializer().descriptor, customJson, cache)
+        val schema = SchemaGenerator.fromDescriptor(WithUuid.serializer().descriptor, customJson, cache, mutableMapOf())
         schema.shouldBeInstanceOf<TypeDefinition>()
         // The id field should resolve to string (UUID serializer uses PrimitiveKind.STRING)
         schema.properties!!["id"] shouldBe TypeDefinition.STRING
@@ -323,12 +378,44 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
 
     should("use cache to avoid re-generating same type") {
         val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
         val descriptor = DescSimpleUser.serializer().descriptor
-        val schema1 = SchemaGenerator.fromDescriptor(descriptor, json, cache)
-        val schema2 = SchemaGenerator.fromDescriptor(descriptor, json, cache)
+        val schema1 = SchemaGenerator.fromDescriptor(descriptor, json, cache, slugOwners)
+        val schema2 = SchemaGenerator.fromDescriptor(descriptor, json, cache, slugOwners)
         // Second call should return cached value
         schema1.shouldBeInstanceOf<TypeDefinition>()
         schema2.shouldBeInstanceOf<TypeDefinition>()
+        schema1 shouldBe schema2
+        cache.keys.filter { it.contains("DescSimpleUser") }.size shouldBe 1
+    }
+
+    should("not fragment a type revisited via two different properties into separate schemas") {
+        val (schema, cache) = generate(DescTwoRefsToSameType.serializer().descriptor)
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        val firstRef = schema.properties!!["first"]
+        val secondRef = schema.properties!!["second"]
+        firstRef.shouldBeInstanceOf<ReferenceDefinition>()
+        secondRef.shouldBeInstanceOf<ReferenceDefinition>()
+        firstRef.`$ref` shouldBe secondRef.`$ref`
+        cache.keys.filter { it.contains("DescSimpleUser") }.size shouldBe 1
+    }
+
+    should("disambiguate colliding types discovered via nested properties, not just top-level calls") {
+        val (schema, cache) = generate(DescWithCollidingStatuses.serializer().descriptor)
+        schema.shouldBeInstanceOf<TypeDefinition>()
+        val oneRef = schema.properties!!["one"]
+        val twoRef = schema.properties!!["two"]
+        oneRef.shouldBeInstanceOf<ReferenceDefinition>()
+        twoRef.shouldBeInstanceOf<ReferenceDefinition>()
+        val oneSlug = oneRef.`$ref`.removePrefix("#/components/schemas/")
+        val twoSlug = twoRef.`$ref`.removePrefix("#/components/schemas/")
+        oneSlug shouldNotBe twoSlug
+        val oneSchema = cache[oneSlug]
+        val twoSchema = cache[twoSlug]
+        oneSchema.shouldBeInstanceOf<TypeDefinition>()
+        twoSchema.shouldBeInstanceOf<TypeDefinition>()
+        oneSchema.properties!!.keys shouldBe setOf("code")
+        twoSchema.properties!!.keys shouldBe setOf("message")
     }
 
     should("generate string for standalone String descriptor") {
@@ -368,7 +455,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         val customJson = Json { serializersModule = module }
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromDescriptor(
-            DescWithContextualUuid.serializer().descriptor, customJson, cache,
+            DescWithContextualUuid.serializer().descriptor, customJson, cache, mutableMapOf(),
         )
         schema.shouldBeInstanceOf<TypeDefinition>()
         schema.properties!!["id"] shouldBe TypeDefinition.STRING
@@ -376,25 +463,126 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     }
 
     should("produce different slugs for same-named classes in different enclosing objects") {
-        val slugA = SlugCollisionA.Status.serializer().descriptor.slug()
-        val slugB = SlugCollisionB.Status.serializer().descriptor.slug()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val slugA = SlugCollisionA.Status.serializer().descriptor.slug(slugOwners)
+        val slugB = SlugCollisionB.Status.serializer().descriptor.slug(slugOwners)
         slugA shouldBe "SlugCollisionAStatus"
         slugB shouldBe "SlugCollisionBStatus"
     }
 
     should("produce different reference slugs for same-named classes") {
         val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
         val customJson = Json.Default
-        SchemaGenerator.fromDescriptor(SlugCollisionA.Status.serializer().descriptor, customJson, cache)
-        SchemaGenerator.fromDescriptor(SlugCollisionB.Status.serializer().descriptor, customJson, cache)
+        SchemaGenerator.fromDescriptor(SlugCollisionA.Status.serializer().descriptor, customJson, cache, slugOwners)
+        SchemaGenerator.fromDescriptor(SlugCollisionB.Status.serializer().descriptor, customJson, cache, slugOwners)
         cache.keys.filter { it.contains("Status") }.size shouldBe 2
+    }
+
+    should("disambiguate top-level classes with the same simple name in different packages") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val customJson = Json.Default
+        val schemaOne = SchemaGenerator.fromDescriptor(
+            PkgOneStatus.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        val schemaTwo = SchemaGenerator.fromDescriptor(
+            PkgTwoStatus.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        cache.keys.filter { it.contains("Status") }.size shouldBe 2
+        schemaOne.shouldBeInstanceOf<TypeDefinition>()
+        schemaTwo.shouldBeInstanceOf<TypeDefinition>()
+        schemaOne.properties!!.keys shouldBe setOf("code")
+        schemaTwo.properties!!.keys shouldBe setOf("message")
+    }
+
+    should("disambiguate same-named classes across packages via the reflection-based schema path") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val schemaOne = SchemaGenerator.fromTypeToSchema(typeOf<PkgOneStatus>(), cache, slugOwners)
+        val schemaTwo = SchemaGenerator.fromTypeToSchema(typeOf<PkgTwoStatus>(), cache, slugOwners)
+        schemaOne.shouldBeInstanceOf<TypeDefinition>()
+        schemaTwo.shouldBeInstanceOf<TypeDefinition>()
+        schemaOne.properties!!.keys shouldBe setOf("code")
+        schemaTwo.properties!!.keys shouldBe setOf("message")
+        val oneSlug = typeOf<PkgOneStatus>().slug(slugOwners)
+        val twoSlug = typeOf<PkgTwoStatus>().slug(slugOwners)
+        oneSlug shouldNotBe twoSlug
+        cache[oneSlug].shouldNotBeNull()
+        cache[twoSlug].shouldNotBeNull()
+    }
+
+    should("disambiguate different classes that share an identical explicit @SerialName") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val customJson = Json.Default
+        val schemaOne = SchemaGenerator.fromDescriptor(
+            SharedNameOne.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        val schemaTwo = SchemaGenerator.fromDescriptor(
+            SharedNameTwo.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        cache.keys.filter { it.contains("SharedName") }.size shouldBe 2
+        schemaOne.shouldBeInstanceOf<TypeDefinition>()
+        schemaTwo.shouldBeInstanceOf<TypeDefinition>()
+        schemaOne.properties!!.keys shouldBe setOf("code")
+        schemaTwo.properties!!.keys shouldBe setOf("message")
+    }
+
+    should("reuse the same slug for a custom-serializer-backed type reached from two different holders") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val customJson = Json.Default
+        SchemaGenerator.fromDescriptor(
+            DescHolderWithCustomAddressOne.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        SchemaGenerator.fromDescriptor(
+            DescHolderWithCustomAddressTwo.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        // DescCustomAddress's hand-built descriptor has no capturedKClass; this previously
+        // fragmented into a new schema entry per holder that referenced it.
+        cache.keys.filter { it.contains("DescCustomAddress") }.size shouldBe 1
+        cache.keys.filter { it.contains("DescCustomCountry") }.size shouldBe 1
+    }
+
+    should("keep a stable disambiguated slug for a losing identity across repeated encounters") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val json = Json.Default
+        SchemaGenerator.fromDescriptor(SharedNameOne.serializer().descriptor, json, cache, slugOwners)
+        val firstSlug = SharedNameTwo.serializer().descriptor.slug(slugOwners)
+        listOf(
+            DescSimpleUser.serializer().descriptor,
+            DescAddress.serializer().descriptor,
+            DescColor.serializer().descriptor,
+        ).forEach { SchemaGenerator.fromDescriptor(it, json, cache, slugOwners) }
+        // Previously recomputed a fresh (and different) slug each time, based on the
+        // ever-growing slugOwners size rather than the losing identity itself.
+        val secondSlug = SharedNameTwo.serializer().descriptor.slug(slugOwners)
+        secondSlug shouldBe firstSlug
+    }
+
+    should("pick up a directly pre-cached override for a non-self-caching kind, mirroring customTypes") {
+        // Mirrors OpenApi.kt's customTypes: an override installed directly into `cache` under a
+        // type's plain slug before any route processing.
+        val cache = mutableMapOf<String, JsonSchema>(
+            "Instant" to TypeDefinition(type = "string", format = "date-time"),
+        )
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val module = SerializersModule { contextual(DescCustomInstantSerializer) }
+        val customJson = Json { serializersModule = module }
+        val schema = SchemaGenerator.fromDescriptor(
+            DescWithContextualInstantField.serializer().descriptor, customJson, cache, slugOwners,
+        )
+        (schema as TypeDefinition).properties!!["createdAt"] shouldBe
+            TypeDefinition(type = "string", format = "date-time")
     }
 
     should("fall back to well-known UUID schema when no module serializer registered") {
         val noContextJson = Json.Default
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromDescriptor(
-            DescWithContextualUuid.serializer().descriptor, noContextJson, cache,
+            DescWithContextualUuid.serializer().descriptor, noContextJson, cache, mutableMapOf(),
         )
         schema.shouldBeInstanceOf<TypeDefinition>()
         schema.properties!!["id"] shouldBe TypeDefinition.UUID
@@ -405,7 +593,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         val noContextJson = Json.Default
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromDescriptor(
-            DescWithContextualInstant.serializer().descriptor, noContextJson, cache,
+            DescWithContextualInstant.serializer().descriptor, noContextJson, cache, mutableMapOf(),
         )
         schema.shouldBeInstanceOf<TypeDefinition>()
         schema.properties!!["createdAt"] shouldBe TypeDefinition(type = "string", format = "date-time")
@@ -414,7 +602,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     should("unwrap value class wrapping @Contextual UUID to string/uuid") {
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromDescriptor(
-            DescWithValueClassId.serializer().descriptor, Json.Default, cache,
+            DescWithValueClassId.serializer().descriptor, Json.Default, cache, mutableMapOf(),
         )
         schema.shouldBeInstanceOf<TypeDefinition>()
         schema.properties!!["id"] shouldBe TypeDefinition.UUID
@@ -424,7 +612,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     should("generate array schema for List of @Contextual UUID") {
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromDescriptor(
-            DescWithListOfContextualIds.serializer().descriptor, Json.Default, cache,
+            DescWithListOfContextualIds.serializer().descriptor, Json.Default, cache, mutableMapOf(),
         )
         schema.shouldBeInstanceOf<TypeDefinition>()
         val idsProp = schema.properties!!["ids"]
@@ -435,7 +623,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     should("generate array schema for Set of String") {
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromDescriptor(
-            DescWithSetOfStrings.serializer().descriptor, Json.Default, cache,
+            DescWithSetOfStrings.serializer().descriptor, Json.Default, cache, mutableMapOf(),
         )
         schema.shouldBeInstanceOf<TypeDefinition>()
         val emailsProp = schema.properties!!["emails"]
@@ -446,7 +634,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     should("produce slug without ? for nullable types") {
         val descriptor = DescWithNullableObject.serializer().descriptor
         val addressDescriptor = descriptor.getElementDescriptor(0)
-        val addressSlug = addressDescriptor.slug()
+        val addressSlug = addressDescriptor.slug(mutableMapOf())
         addressSlug.contains("?") shouldBe false
     }
 })

@@ -39,12 +39,19 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         json: Json,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         if (descriptor.isInline) {
             val inner = descriptor.getElementDescriptor(0)
-            return fromDescriptor(inner, json, cache)
+            return fromDescriptor(inner, json, cache, slugOwners)
         }
-        val slug = descriptor.slug()
+        // Only object/enum kinds cache themselves below; every other kind's lookup here only
+        // ever picks up an externally-installed override (e.g. customTypes), so it's safe to
+        // use the plain, non-disambiguated slug.
+        val selfCaching = descriptor.kind == SerialKind.ENUM ||
+            descriptor.kind == StructureKind.CLASS ||
+            descriptor.kind == StructureKind.OBJECT
+        val slug = if (selfCaching) descriptor.slug(slugOwners) else descriptor.plainSlug()
         cache[slug]?.let { return it }
         return when (descriptor.kind) {
             PrimitiveKind.STRING -> TypeDefinition.STRING
@@ -56,21 +63,22 @@ object SchemaGenerator {
             PrimitiveKind.BYTE -> TypeDefinition.INT
             PrimitiveKind.SHORT -> TypeDefinition.INT
             PrimitiveKind.CHAR -> TypeDefinition.STRING
-            SerialKind.ENUM -> handleDescriptorEnum(descriptor, cache)
-            StructureKind.LIST -> handleDescriptorList(descriptor, json, cache)
-            StructureKind.MAP -> handleDescriptorMap(descriptor, json, cache)
-            StructureKind.CLASS, StructureKind.OBJECT -> handleDescriptorObject(descriptor, json, cache)
-            SerialKind.CONTEXTUAL -> handleDescriptorContextual(descriptor, json, cache)
-            is PolymorphicKind -> handleDescriptorPolymorphic(descriptor, json, cache)
+            SerialKind.ENUM -> handleDescriptorEnum(descriptor, cache, slugOwners)
+            StructureKind.LIST -> handleDescriptorList(descriptor, json, cache, slugOwners)
+            StructureKind.MAP -> handleDescriptorMap(descriptor, json, cache, slugOwners)
+            StructureKind.CLASS, StructureKind.OBJECT -> handleDescriptorObject(descriptor, json, cache, slugOwners)
+            SerialKind.CONTEXTUAL -> handleDescriptorContextual(descriptor, json, cache, slugOwners)
+            is PolymorphicKind -> handleDescriptorPolymorphic(descriptor, json, cache, slugOwners)
         }
     }
 
     private fun handleDescriptorEnum(
         descriptor: SerialDescriptor,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         val definition = EnumDefinition(enum = descriptor.elementNames.toSet())
-        cache[descriptor.slug()] = definition
+        cache[descriptor.slug(slugOwners)] = definition
         return definition
     }
 
@@ -78,12 +86,13 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         json: Json,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         val elementDescriptor = descriptor.getElementDescriptor(0)
-        val elementSchema = fromDescriptor(elementDescriptor, json, cache).let {
+        val elementSchema = fromDescriptor(elementDescriptor, json, cache, slugOwners).let {
             if (it.isObjectOrEnum()) {
-                cache[elementDescriptor.slug()] = it
-                ReferenceDefinition(elementDescriptor.referenceSlug())
+                cache[elementDescriptor.slug(slugOwners)] = it
+                ReferenceDefinition(elementDescriptor.referenceSlug(slugOwners))
             } else {
                 it
             }
@@ -95,13 +104,14 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         json: Json,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         // Map descriptor element 0 = key, element 1 = value
         val valueDescriptor = descriptor.getElementDescriptor(1)
-        val valueSchema = fromDescriptor(valueDescriptor, json, cache).let {
+        val valueSchema = fromDescriptor(valueDescriptor, json, cache, slugOwners).let {
             if (it is TypeDefinition && it.type == "object") {
-                cache[valueDescriptor.slug()] = it
-                ReferenceDefinition(valueDescriptor.referenceSlug())
+                cache[valueDescriptor.slug(slugOwners)] = it
+                ReferenceDefinition(valueDescriptor.referenceSlug(slugOwners))
             } else {
                 it
             }
@@ -113,22 +123,23 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         json: Json,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         if (descriptor.elementsCount == 0) {
             return TypeDefinition(type = "object")
         }
-        val slug = descriptor.slug()
-        val referenceSlug = descriptor.referenceSlug()
+        val slug = descriptor.slug(slugOwners)
+        val referenceSlug = descriptor.referenceSlug(slugOwners)
         cache[slug] = ReferenceDefinition(referenceSlug)
         val props = mutableMapOf<String, JsonSchema>()
         val required = mutableSetOf<String>()
         for (i in 0 until descriptor.elementsCount) {
             val name = descriptor.getElementName(i)
             val elementDescriptor = descriptor.getElementDescriptor(i)
-            val elementSchema = fromDescriptor(elementDescriptor, json, cache).let {
+            val elementSchema = fromDescriptor(elementDescriptor, json, cache, slugOwners).let {
                 if (it.isObjectOrEnum()) {
-                    cache[elementDescriptor.slug()] = it
-                    ReferenceDefinition(elementDescriptor.referenceSlug())
+                    cache[elementDescriptor.slug(slugOwners)] = it
+                    ReferenceDefinition(elementDescriptor.referenceSlug(slugOwners))
                 } else {
                     it
                 }
@@ -163,10 +174,11 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         json: Json,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         val resolved = resolveContextual(descriptor, json)
         if (resolved != null) {
-            return fromDescriptor(resolved, json, cache)
+            return fromDescriptor(resolved, json, cache, slugOwners)
         }
         val captured = descriptor.capturedKClass
         wellKnownContextual[captured]?.let { return it }
@@ -196,6 +208,7 @@ object SchemaGenerator {
         descriptor: SerialDescriptor,
         json: Json,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         // Sealed class descriptor structure:
         //   element 0 = "type" discriminator (PrimitiveKind.STRING)
@@ -205,11 +218,11 @@ object SchemaGenerator {
             val valueDescriptor = descriptor.getElementDescriptor(1)
             for (i in 0 until valueDescriptor.elementsCount) {
                 val subDescriptor = valueDescriptor.getElementDescriptor(i)
-                val schema = fromDescriptor(subDescriptor, json, cache)
+                val schema = fromDescriptor(subDescriptor, json, cache, slugOwners)
                 val enriched = addDescriptorSealedDiscriminator(subDescriptor, schema)
                 if (enriched is TypeDefinition && enriched.type == "object") {
-                    cache[subDescriptor.slug()] = enriched
-                    subclasses.add(ReferenceDefinition(subDescriptor.referenceSlug()))
+                    cache[subDescriptor.slug(slugOwners)] = enriched
+                    subclasses.add(ReferenceDefinition(subDescriptor.referenceSlug(slugOwners)))
                 } else {
                     subclasses.add(enriched)
                 }
@@ -240,8 +253,9 @@ object SchemaGenerator {
     fun fromTypeToSchema(
         type: KType,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
-        val slug = type.slug()
+        val slug = type.slug(slugOwners)
         cache[slug]?.let { return it }
         return when (val clazz = type.classifier as KClass<*>) {
             Unit::class -> error("Unit cannot be converted to JsonSchema")
@@ -252,7 +266,7 @@ object SchemaGenerator {
             String::class -> checkForNull(type, TypeDefinition.STRING)
             Boolean::class -> checkForNull(type, TypeDefinition.BOOLEAN)
             UUID::class -> checkForNull(type, TypeDefinition.UUID)
-            else -> complexTypeToSchema(clazz, type, cache)
+            else -> complexTypeToSchema(clazz, type, cache, slugOwners)
         }
     }
 
@@ -265,26 +279,36 @@ object SchemaGenerator {
         clazz: KClass<*>,
         type: KType,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema = try {
         when {
-            clazz.isSubclassOf(Enum::class) -> handleEnum(type, clazz, cache)
-            clazz.isSubclassOf(Collection::class) -> handleCollection(type, cache)
-            clazz.isSubclassOf(Map::class) -> handleMap(type, cache)
-            clazz.isSealed -> handleSealed(type, clazz, cache)
+            clazz.isSubclassOf(Enum::class) -> handleEnum(type, clazz, cache, slugOwners)
+            clazz.isSubclassOf(Collection::class) -> handleCollection(type, cache, slugOwners)
+            clazz.isSubclassOf(Map::class) -> handleMap(type, cache, slugOwners)
+            clazz.isSealed -> handleSealed(type, clazz, cache, slugOwners)
             clazz.primaryConstructor == null -> TypeDefinition(type = "object")
-            else -> handleObject(type, clazz, cache)
+            else -> handleObject(type, clazz, cache, slugOwners)
         }
     } catch (_: Exception) {
         TypeDefinition(type = "object")
     }
 
-    private fun handleEnum(type: KType, clazz: KClass<*>, cache: MutableMap<String, JsonSchema>): JsonSchema {
-        cache[type.slug()] = ReferenceDefinition(type.referenceSlug())
+    private fun handleEnum(
+        type: KType,
+        clazz: KClass<*>,
+        cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    ): JsonSchema {
+        cache[type.slug(slugOwners)] = ReferenceDefinition(type.referenceSlug(slugOwners))
         val options = clazz.java.enumConstants.map { it.toString() }.toSet()
         return EnumDefinition(enum = options)
     }
 
-    private fun handleCollection(type: KType, cache: MutableMap<String, JsonSchema>): JsonSchema {
+    private fun handleCollection(
+        type: KType,
+        cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    ): JsonSchema {
         val elementType = type.arguments.firstOrNull()?.type
         if (elementType == null) {
             val definition = ArrayDefinition(TypeDefinition(type = "object"))
@@ -293,10 +317,10 @@ object SchemaGenerator {
                 false -> definition
             }
         }
-        val elementSchema = fromTypeToSchema(elementType, cache).let {
+        val elementSchema = fromTypeToSchema(elementType, cache, slugOwners).let {
             if (it.isObjectOrEnum()) {
-                cache[elementType.slug()] = it
-                ReferenceDefinition(elementType.referenceSlug())
+                cache[elementType.slug(slugOwners)] = it
+                ReferenceDefinition(elementType.referenceSlug(slugOwners))
             } else {
                 it
             }
@@ -308,7 +332,11 @@ object SchemaGenerator {
         }
     }
 
-    private fun handleMap(type: KType, cache: MutableMap<String, JsonSchema>): JsonSchema {
+    private fun handleMap(
+        type: KType,
+        cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    ): JsonSchema {
         val keyType = type.arguments.firstOrNull()?.type
         val keyClass = keyType?.classifier as? KClass<*>
         if (keyClass == null || type.arguments.size < 2) {
@@ -321,10 +349,10 @@ object SchemaGenerator {
         // Map keys must serialize as strings in JSON. String, Enum, value classes,
         // and any type with a string-based serializer are all valid.
         val valueType = type.arguments[1].type ?: error("Map value type argument missing")
-        val valueSchema = fromTypeToSchema(valueType, cache).let {
+        val valueSchema = fromTypeToSchema(valueType, cache, slugOwners).let {
             if (it is TypeDefinition && it.type == "object") {
-                cache[valueType.slug()] = it
-                ReferenceDefinition(valueType.referenceSlug())
+                cache[valueType.slug(slugOwners)] = it
+                ReferenceDefinition(valueType.referenceSlug(slugOwners))
             } else {
                 it
             }
@@ -336,15 +364,20 @@ object SchemaGenerator {
         }
     }
 
-    private fun handleSealed(type: KType, clazz: KClass<*>, cache: MutableMap<String, JsonSchema>): JsonSchema {
+    private fun handleSealed(
+        type: KType,
+        clazz: KClass<*>,
+        cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    ): JsonSchema {
         val subclasses = clazz.sealedSubclasses
             .map { it.createType(type.arguments) }
             .map { t ->
-                val schema = fromTypeToSchema(t, cache)
+                val schema = fromTypeToSchema(t, cache, slugOwners)
                 val enriched = addSealedDiscriminator(t, schema)
                 if (enriched is TypeDefinition && enriched.type == "object") {
-                    cache[t.slug()] = enriched
-                    ReferenceDefinition(t.referenceSlug())
+                    cache[t.slug(slugOwners)] = enriched
+                    ReferenceDefinition(t.referenceSlug(slugOwners))
                 } else {
                     enriched
                 }
@@ -370,18 +403,19 @@ object SchemaGenerator {
         type: KType,
         clazz: KClass<*>,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
-        val slug = type.slug()
-        val referenceSlug = type.referenceSlug()
+        val slug = type.slug(slugOwners)
+        val referenceSlug = type.referenceSlug(slugOwners)
         cache[slug] = ReferenceDefinition(referenceSlug)
         val typeMap = clazz.typeParameters.zip(type.arguments).toMap()
         val props = serializableProperties(clazz)
             .filterNot { it.javaField == null }
             .associate { prop ->
                 val schema = when {
-                    prop.needsGenericInjection(typeMap) -> handleNestedGenerics(typeMap, prop, cache)
-                    typeMap.containsKey(prop.returnType.classifier) -> handleGenericProperty(prop, typeMap, cache)
-                    else -> handleProperty(prop, cache)
+                    prop.needsGenericInjection(typeMap) -> handleNestedGenerics(typeMap, prop, cache, slugOwners)
+                    typeMap.containsKey(prop.returnType.classifier) -> handleGenericProperty(prop, typeMap, cache, slugOwners)
+                    else -> handleProperty(prop, cache, slugOwners)
                 }
                 val nullChecked = when (prop.returnType.isMarkedNullable && !schema.isNullable()) {
                     true -> OneOfDefinition(NullableDefinition(), schema)
@@ -411,6 +445,7 @@ object SchemaGenerator {
         typeMap: Map<KTypeParameter, KTypeProjection>,
         prop: KProperty<*>,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         val propClass = prop.returnType.classifier as KClass<*>
         val types = prop.returnType.arguments.map {
@@ -418,10 +453,10 @@ object SchemaGenerator {
             typeMap.filterKeys { k -> k.name == typeSymbol }.values.first()
         }
         val constructedType = propClass.createType(types)
-        return fromTypeToSchema(constructedType, cache).let {
+        return fromTypeToSchema(constructedType, cache, slugOwners).let {
             if (it.isObjectOrEnum()) {
-                cache[constructedType.slug()] = it
-                ReferenceDefinition(constructedType.referenceSlug())
+                cache[constructedType.slug(slugOwners)] = it
+                ReferenceDefinition(constructedType.referenceSlug(slugOwners))
             } else {
                 it
             }
@@ -432,13 +467,14 @@ object SchemaGenerator {
         prop: KProperty<*>,
         typeMap: Map<KTypeParameter, KTypeProjection>,
         cache: MutableMap<String, JsonSchema>,
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         val type = typeMap[prop.returnType.classifier]?.type
             ?: error("Failed to resolve generic type for ${prop.name}")
-        return fromTypeToSchema(type, cache).let {
+        return fromTypeToSchema(type, cache, slugOwners).let {
             if (it.isObjectOrEnum()) {
-                cache[type.slug()] = it
-                ReferenceDefinition(type.referenceSlug())
+                cache[type.slug(slugOwners)] = it
+                ReferenceDefinition(type.referenceSlug(slugOwners))
             } else {
                 it
             }
@@ -448,10 +484,11 @@ object SchemaGenerator {
     private fun handleProperty(
         prop: KProperty<*>,
         cache: MutableMap<String, JsonSchema>,
-    ): JsonSchema = fromTypeToSchema(prop.returnType, cache).let {
+        slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    ): JsonSchema = fromTypeToSchema(prop.returnType, cache, slugOwners).let {
         if (it.isObjectOrEnum()) {
-            cache[prop.returnType.slug()] = it
-            ReferenceDefinition(prop.returnType.referenceSlug())
+            cache[prop.returnType.slug(slugOwners)] = it
+            ReferenceDefinition(prop.returnType.referenceSlug(slugOwners))
         } else {
             it
         }
@@ -480,39 +517,4 @@ object SchemaGenerator {
     }
 
     private fun JsonSchema.isNullable(): Boolean = this is OneOfDefinition && oneOf.any { it is NullableDefinition }
-}
-
-private const val COMPONENT_SLUG = "#/components/schemas"
-
-fun KType.slug(): String = when {
-    arguments.isNotEmpty() -> {
-        val clazz = classifier as KClass<*>
-        val classNames = arguments.map { (it.type?.classifier as? KClass<*>)?.schemaSlug() ?: "Any" }
-        classNames.joinToString(separator = "-", prefix = "${clazz.schemaSlug()}-")
-    }
-    else -> (classifier as KClass<*>).schemaSlug()
-}
-
-fun KType.referenceSlug(): String = "$COMPONENT_SLUG/${slug()}"
-
-@OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.slug(): String {
-    val name = serialName.removeSuffix("?")
-    val parts = name.split('.')
-    val classStart = parts.indexOfFirst { it.firstOrNull()?.isUpperCase() == true }
-    return if (classStart >= 0) {
-        parts.subList(classStart, parts.size).joinToString("")
-    } else {
-        parts.last()
-    }
-}
-
-@OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.referenceSlug(): String = "$COMPONENT_SLUG/${slug()}"
-
-private fun KClass<*>.schemaSlug(): String {
-    if (java.packageName == "java.lang") return simpleName!!
-    if (java.packageName == "java.util") return simpleName!!
-    val pkg = java.packageName
-    return qualifiedName?.replace(pkg, "")?.replace(".", "") ?: simpleName!!
 }
