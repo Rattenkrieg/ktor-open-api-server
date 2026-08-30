@@ -86,6 +86,21 @@ sealed interface DescOutcome {
     data object Cancelled : DescOutcome
 }
 
+// Two unrelated sealed hierarchies whose variants share an explicit @SerialName.
+@Serializable
+sealed interface DescSealedCollisionOne {
+    @Serializable
+    @SerialName("SHARED_VARIANT")
+    data class SharedVariant(val fieldOne: String) : DescSealedCollisionOne
+}
+
+@Serializable
+sealed interface DescSealedCollisionTwo {
+    @Serializable
+    @SerialName("SHARED_VARIANT")
+    data class SharedVariant(val fieldTwo: Int) : DescSealedCollisionTwo
+}
+
 @Serializable
 data class DescWithNullableNested(val user: DescSimpleUser?)
 
@@ -527,6 +542,59 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         schemaTwo.shouldBeInstanceOf<TypeDefinition>()
         schemaOne.properties!!.keys shouldBe setOf("code")
         schemaTwo.properties!!.keys shouldBe setOf("message")
+    }
+
+    should("disambiguate sealed-variant siblings from different hierarchies that share an explicit @SerialName") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val json = Json.Default
+        val schemaOne = SchemaGenerator.fromDescriptor(
+            DescSealedCollisionOne.serializer().descriptor, json, cache, slugOwners,
+        )
+        val schemaTwo = SchemaGenerator.fromDescriptor(
+            DescSealedCollisionTwo.serializer().descriptor, json, cache, slugOwners,
+        )
+        schemaOne.shouldBeInstanceOf<AnyOfDefinition>()
+        schemaTwo.shouldBeInstanceOf<AnyOfDefinition>()
+        val refOne = schemaOne.anyOf.single().shouldBeInstanceOf<ReferenceDefinition>().`$ref`
+        val refTwo = schemaTwo.anyOf.single().shouldBeInstanceOf<ReferenceDefinition>().`$ref`
+        refOne shouldNotBe refTwo
+        // First registrant keeps the plain slug; the second is disambiguated by its hierarchy.
+        refOne shouldBe "#/components/schemas/SHARED_VARIANT"
+        refTwo shouldBe "#/components/schemas/DescSealedCollisionTwoSHARED_VARIANT"
+        val oneSchema = cache[refOne.removePrefix("#/components/schemas/")]
+        val twoSchema = cache[refTwo.removePrefix("#/components/schemas/")]
+        oneSchema.shouldBeInstanceOf<TypeDefinition>().properties!!.keys shouldBe setOf("type", "fieldOne")
+        twoSchema.shouldBeInstanceOf<TypeDefinition>().properties!!.keys shouldBe setOf("type", "fieldTwo")
+    }
+
+    should("keep a sealed-variant collision slug independent of how many other schemas registered first") {
+        val json = Json.Default
+
+        val fewPriorRegistrations = mutableMapOf<SchemaSlug, ClassIdentity>()
+        SchemaGenerator.fromDescriptor(
+            DescSealedCollisionOne.serializer().descriptor, json, mutableMapOf(), fewPriorRegistrations,
+        )
+        val slugWithFewPriorRegistrations = SchemaGenerator.fromDescriptor(
+            DescSealedCollisionTwo.serializer().descriptor, json, mutableMapOf(), fewPriorRegistrations,
+        ).let { (it as AnyOfDefinition).anyOf.single() as ReferenceDefinition }.`$ref`
+
+        val manyPriorRegistrations = mutableMapOf<SchemaSlug, ClassIdentity>()
+        listOf(
+            DescSimpleUser.serializer().descriptor,
+            DescAddress.serializer().descriptor,
+            DescColor.serializer().descriptor,
+            DescShape.serializer().descriptor,
+            DescOutcome.serializer().descriptor,
+        ).forEach { SchemaGenerator.fromDescriptor(it, json, mutableMapOf(), manyPriorRegistrations) }
+        SchemaGenerator.fromDescriptor(
+            DescSealedCollisionOne.serializer().descriptor, json, mutableMapOf(), manyPriorRegistrations,
+        )
+        val slugWithManyPriorRegistrations = SchemaGenerator.fromDescriptor(
+            DescSealedCollisionTwo.serializer().descriptor, json, mutableMapOf(), manyPriorRegistrations,
+        ).let { (it as AnyOfDefinition).anyOf.single() as ReferenceDefinition }.`$ref`
+
+        slugWithManyPriorRegistrations shouldBe slugWithFewPriorRegistrations
     }
 
     should("reuse the same slug for a custom-serializer-backed type reached from two different holders") {

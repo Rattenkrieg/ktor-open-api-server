@@ -40,6 +40,8 @@ object SchemaGenerator {
         json: Json,
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+        // Set only for a sealed/polymorphic child — see disambiguateByShape in SchemaSlug.kt.
+        outerSlug: String? = null,
     ): JsonSchema {
         if (descriptor.isInline) {
             val inner = descriptor.getElementDescriptor(0)
@@ -51,7 +53,7 @@ object SchemaGenerator {
         val selfCaching = descriptor.kind == SerialKind.ENUM ||
             descriptor.kind == StructureKind.CLASS ||
             descriptor.kind == StructureKind.OBJECT
-        val slug = if (selfCaching) descriptor.slug(slugOwners) else descriptor.plainSlug()
+        val slug = if (selfCaching) descriptor.slug(slugOwners, outerSlug) else descriptor.plainSlug()
         cache[slug]?.let { return it }
         return when (descriptor.kind) {
             PrimitiveKind.STRING -> TypeDefinition.STRING
@@ -215,10 +217,11 @@ object SchemaGenerator {
         //   element 1 = "value" wrapper whose sub-elements are the actual subclass descriptors
         val subclasses = mutableSetOf<JsonSchema>()
         if (descriptor.elementsCount >= 2) {
+            val outerSlug = descriptor.slug(slugOwners)
             val valueDescriptor = descriptor.getElementDescriptor(1)
             for (i in 0 until valueDescriptor.elementsCount) {
                 val subDescriptor = valueDescriptor.getElementDescriptor(i)
-                val schema = fromDescriptor(subDescriptor, json, cache, slugOwners)
+                val schema = fromDescriptor(subDescriptor, json, cache, slugOwners, outerSlug)
                 val enriched = addDescriptorSealedDiscriminator(subDescriptor, schema)
                 if (enriched is TypeDefinition && enriched.type == "object") {
                     cache[subDescriptor.slug(slugOwners)] = enriched

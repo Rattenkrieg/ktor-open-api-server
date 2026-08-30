@@ -66,23 +66,36 @@ private fun shortSlugParts(name: String): List<String> {
 @OptIn(ExperimentalSerializationApi::class)
 fun SerialDescriptor.plainSlug(): String = shortSlugParts(serialName.removeSuffix("?")).joinToString("")
 
+// Disambiguated by the enclosing type, not `slugOwners.size` — never depends on registration order.
+private fun disambiguateByShape(shortSlug: String, outerSlug: String?, shape: ClassIdentity.ByShape): String =
+    outerSlug?.let { "$it$shortSlug" }
+        ?: "${shortSlug}_${shapeHash(shape)}"
+
+private fun shapeHash(shape: ClassIdentity.ByShape): String =
+    Integer.toHexString((shape.kind + shape.elementNames.joinToString(",")).hashCode())
+
 @OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String {
+fun SerialDescriptor.slug(
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    outerSlug: String? = null,
+): String {
     val name = serialName.removeSuffix("?")
     val shortSlug = shortSlugParts(name).joinToString("")
     // capturedKClass is usually null; the un-shortened serialName is a fully qualified name
     // unless @SerialName overrode it to exactly the colliding short form.
     val qualifiedName = capturedKClass?.qualifiedName ?: name.takeIf { it != shortSlug }
-    val identity = qualifiedName?.let { ClassIdentity.ByQualifiedName(it) }
-        ?: ClassIdentity.ByShape(kind.toString(), (0 until elementsCount).map { getElementName(it) })
+    val shape = ClassIdentity.ByShape(kind.toString(), (0 until elementsCount).map { getElementName(it) })
+    val identity = qualifiedName?.let { ClassIdentity.ByQualifiedName(it) } ?: shape
     return resolveSlug(shortSlug, identity, slugOwners) {
-        qualifiedName?.replace(".", "") ?: "${shortSlug}_${slugOwners.size}"
+        qualifiedName?.replace(".", "") ?: disambiguateByShape(shortSlug, outerSlug, shape)
     }
 }
 
 @OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
-    "$COMPONENT_SLUG/${slug(slugOwners)}"
+fun SerialDescriptor.referenceSlug(
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    outerSlug: String? = null,
+): String = "$COMPONENT_SLUG/${slug(slugOwners, outerSlug)}"
 
 private fun KClass<*>.schemaSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String {
     val pkg = java.packageName
