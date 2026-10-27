@@ -86,6 +86,27 @@ enum class DescColor { RED, GREEN, BLUE }
 data class DescWithEnum(val color: DescColor)
 
 @Serializable
+data class DescEnumMapHolder(val byName: Map<String, DescColor>)
+
+object DescBrokenSerializer : KSerializer<DescBroken> {
+    override val descriptor: SerialDescriptor get() = error("no descriptor")
+    override fun serialize(encoder: Encoder, value: DescBroken) = error("not used in test")
+    override fun deserialize(decoder: Decoder): DescBroken = error("not used in test")
+}
+
+@Serializable(with = DescBrokenSerializer::class)
+data class DescBroken(val value: Int)
+
+@Serializable
+data class DescBrokenHolder(val inner: DescBroken)
+
+@Serializable
+sealed interface DescBrokenSealed {
+    @Serializable
+    data class Bad(val inner: DescBroken) : DescBrokenSealed
+}
+
+@Serializable
 sealed interface DescShape {
     @Serializable
     @SerialName("circle")
@@ -1521,6 +1542,27 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         val schema = SchemaGenerator.fromTypeToSchema(typeOf<DescModuleSealed>(), moduleJson, cache, mutableMapOf())
         val serializer = moduleJson.serializersModule.serializer(typeOf<DescModuleSealed>())
         shouldMatchWire(schema, cache, moduleJson, serializer, listOf(DescModuleSealed.Variant(1)))
+    }
+
+    should("leave no placeholder behind when a descriptor-based build fails") {
+        listOf(DescBrokenHolder.serializer().descriptor, DescBrokenSealed.serializer().descriptor).forEach {
+            val cache = mutableMapOf<String, JsonSchema>()
+            shouldThrow<IllegalStateException> { SchemaGenerator.fromDescriptor(it, json, cache, mutableMapOf()) }
+            cache.filter { (slug, schema) -> schema == ReferenceDefinition("#/components/schemas/$slug") }
+                .keys shouldBe setOf()
+        }
+    }
+
+    should("leave no placeholder for an enum documented inline via the reflection-based schema path") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        SchemaGenerator.fromTypeToSchema(typeOf<DescEnumMapHolder>(), json, cache, mutableMapOf())
+        cache shouldBe mapOf(
+            "DescEnumMapHolder" to TypeDefinition(
+                type = "object",
+                properties = mapOf("byName" to MapDefinition(EnumDefinition(enum = setOf("RED", "GREEN", "BLUE")))),
+                required = setOf("byName"),
+            ),
+        )
     }
 
     should("leave an enum variant untagged") {
