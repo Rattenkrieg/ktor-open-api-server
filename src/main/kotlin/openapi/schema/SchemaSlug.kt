@@ -22,7 +22,17 @@ value class SchemaSlug(val value: String)
 sealed class ClassIdentity {
     data class ByQualifiedName(val name: String) : ClassIdentity()
     data class ByShape(val kind: String, val elementNames: List<String>) : ClassIdentity()
-    data class InHierarchy(val hierarchySlug: String, val variantSlug: String) : ClassIdentity()
+
+    // A sealed variant's component under one discriminator name; it shares the class's plain uses.
+    data class Tagged(val identity: ClassIdentity, val discriminator: String) : ClassIdentity()
+}
+
+private fun ClassIdentity.taggedWith(discriminator: String?): ClassIdentity =
+    discriminator?.let { ClassIdentity.Tagged(this, it) } ?: this
+
+private fun ClassIdentity.untagged(): ClassIdentity = when (this) {
+    is ClassIdentity.Tagged -> identity
+    is ClassIdentity.ByQualifiedName, is ClassIdentity.ByShape -> this
 }
 
 private fun resolveSlug(
@@ -33,11 +43,11 @@ private fun resolveSlug(
 ): String {
     val slug = SchemaSlug(shortSlug)
     val owner = slugOwners[slug]
-    if (owner == null) {
+    if (owner == null || owner == identity.untagged()) {
         slugOwners[slug] = identity
         return shortSlug
     }
-    if (owner == identity) return shortSlug
+    if (owner == identity || owner.untagged() == identity) return shortSlug
     // Reuse this identity's previously-assigned disambiguated slug, if any, instead of
     // recomputing a fresh one on every repeated collision.
     slugOwners.entries.firstOrNull { it.value == identity }?.let { return it.key.value }
@@ -46,13 +56,13 @@ private fun resolveSlug(
     return disambiguated
 }
 
-fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String = when {
+fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>, discriminator: String? = null): String = when {
     arguments.isNotEmpty() -> {
         val clazz = classifier as KClass<*>
-        val classNames = arguments.map { (it.type?.classifier as? KClass<*>)?.schemaSlug(slugOwners) ?: "Any" }
-        classNames.joinToString(separator = "-", prefix = "${clazz.schemaSlug(slugOwners)}-")
+        val classNames = arguments.map { (it.type?.classifier as? KClass<*>)?.schemaSlug(slugOwners, null) ?: "Any" }
+        classNames.joinToString(separator = "-", prefix = "${clazz.schemaSlug(slugOwners, discriminator)}-")
     }
-    else -> (classifier as KClass<*>).schemaSlug(slugOwners)
+    else -> (classifier as KClass<*>).schemaSlug(slugOwners, discriminator)
 }
 
 fun KType.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
@@ -79,6 +89,7 @@ private fun shapeHash(shape: ClassIdentity.ByShape): String =
 fun SerialDescriptor.slug(
     slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     outerSlug: String? = null,
+    discriminator: String? = null,
 ): String {
     val name = serialName.removeSuffix("?")
     val shortSlug = shortSlugParts(name).joinToString("")
@@ -86,7 +97,7 @@ fun SerialDescriptor.slug(
     // unless @SerialName overrode it to exactly the colliding short form.
     val qualifiedName = capturedKClass?.qualifiedName ?: name.takeIf { it != shortSlug }
     val shape = ClassIdentity.ByShape(kind.toString(), (0 until elementsCount).map { getElementName(it) })
-    val identity = qualifiedName?.let { ClassIdentity.ByQualifiedName(it) } ?: shape
+    val identity = (qualifiedName?.let { ClassIdentity.ByQualifiedName(it) } ?: shape).taggedWith(discriminator)
     return resolveSlug(shortSlug, identity, slugOwners) {
         qualifiedName?.replace(".", "") ?: disambiguateByShape(shortSlug, outerSlug, shape)
     }
@@ -98,26 +109,22 @@ fun SerialDescriptor.referenceSlug(
     outerSlug: String? = null,
 ): String = "$COMPONENT_SLUG/${slug(slugOwners, outerSlug)}"
 
-private fun KClass<*>.schemaSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String {
+// A variant documented under a discriminator other than its own gets a component per parent. "." never occurs
+// in a class slug, so these names cannot collide with one.
+@OptIn(ExperimentalSerializationApi::class)
+fun SerialDescriptor.foreignVariantSlug(outerSlug: String): String = "$outerSlug.${plainSlug()}"
+
+fun KType.foreignVariantSlug(outer: KType, slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String {
+    val clazz = classifier as KClass<*>
+    val variantSlug = checkNotNull(clazz.qualifiedName).removePrefix(clazz.java.packageName).replace(".", "")
+    return "${outer.slug(slugOwners)}.$variantSlug"
+}
+
+private fun KClass<*>.schemaSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>, discriminator: String?): String {
     val pkg = java.packageName
     if (pkg == "java.lang" || pkg == "java.util") return simpleName!!
     val qualifiedName = qualifiedName ?: return simpleName!!
     val shortSlug = qualifiedName.replace(pkg, "").replace(".", "")
-    return resolveSlug(shortSlug, ClassIdentity.ByQualifiedName(qualifiedName), slugOwners) { qualifiedName.replace(".", "") }
-}
-
-// A sealed variant tagged with a discriminator other than its own gets one component per hierarchy.
-@OptIn(ExperimentalSerializationApi::class)
-fun SerialDescriptor.hierarchySlug(outerSlug: String, slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
-    resolveHierarchySlug(outerSlug, slug(slugOwners, outerSlug), slugOwners)
-
-fun KType.hierarchySlug(outer: KType, slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
-    resolveHierarchySlug(outer.slug(slugOwners), slug(slugOwners), slugOwners)
-
-private fun resolveHierarchySlug(
-    outerSlug: String,
-    variantSlug: String,
-    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
-): String = resolveSlug("$outerSlug$variantSlug", ClassIdentity.InHierarchy(outerSlug, variantSlug), slugOwners) {
-    "${outerSlug}_$variantSlug"
+    val identity = ClassIdentity.ByQualifiedName(qualifiedName).taggedWith(discriminator)
+    return resolveSlug(shortSlug, identity, slugOwners) { qualifiedName.replace(".", "") }
 }

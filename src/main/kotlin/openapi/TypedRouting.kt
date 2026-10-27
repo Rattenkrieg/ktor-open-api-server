@@ -26,6 +26,7 @@ import kotlin.reflect.typeOf
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
+import openapi.schema.UnsupportedSchemaException
 
 class TypedContext<P : RequestPayload>(
     val payload: P,
@@ -574,6 +575,8 @@ fun registerRouteSpec(
     try {
         val json = route.application.attributes.getOrNull(OpenApiJsonKey) ?: Json.Default
         addRouteToSpec(spec, path, method, requestType, responseType, tags, security, json)
+    } catch (e: UnsupportedSchemaException) {
+        throw e
     } catch (e: Exception) {
         route.application.log.warn("Failed to register OpenAPI spec for $method $path: ${e.message}")
     }

@@ -2,7 +2,6 @@
 package openapi.schema
 
 import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Transient
 import kotlinx.serialization.descriptors.PolymorphicKind
@@ -29,7 +28,6 @@ import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
 import kotlin.reflect.KTypeParameter
 import kotlin.reflect.KTypeProjection
-import kotlin.reflect.full.allSuperclasses
 import kotlin.reflect.full.createType
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.hasAnnotation
@@ -38,7 +36,7 @@ import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaField
 
-class UnsupportedSchemaException(message: String) : IllegalArgumentException(message)
+class UnsupportedSchemaException(message: String) : RuntimeException(message)
 
 @OptIn(ExperimentalSerializationApi::class)
 object SchemaGenerator {
@@ -51,6 +49,7 @@ object SchemaGenerator {
         // Set only for a sealed/polymorphic child — see disambiguateByShape in SchemaSlug.kt.
         outerSlug: String? = null,
     ): JsonSchema {
+        json.refuseAllJsonObjects()
         if (descriptor.isInline) {
             val inner = descriptor.getElementDescriptor(0)
             return fromDescriptor(inner, json, cache, slugOwners)
@@ -256,55 +255,61 @@ object SchemaGenerator {
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
-        // The variant's plain component carries the discriminator its own descriptor inherits, never another one.
-        val ownComponent = descriptor.classDiscriminator(json) == discriminator
-        val fresh = !ownComponent && !descriptor.isInline &&
+        val isObject = !descriptor.isInline &&
             (descriptor.kind == StructureKind.CLASS || descriptor.kind == StructureKind.OBJECT)
-        val schema = when (fresh) {
-            true -> descriptorObjectDefinition(descriptor, json, cache, slugOwners)
-            false -> fromDescriptor(descriptor, json, cache, slugOwners, outerSlug)
+        if (!isObject) return fromDescriptor(descriptor, json, cache, slugOwners, outerSlug)
+        refuseUndescribable(descriptor.serialName, descriptor.elementNames, discriminator, json)
+        val slug = when (descriptor.classDiscriminator(json) == discriminator) {
+            true -> descriptor.slug(slugOwners, outerSlug, discriminator)
+            false -> descriptor.foreignVariantSlug(outerSlug)
         }
-        if (schema !is TypeDefinition || schema.type != "object") return schema
-        val slug = when (ownComponent) {
-            true -> descriptor.slug(slugOwners, outerSlug)
-            false -> descriptor.hierarchySlug(outerSlug, slugOwners)
+        return taggedVariant(slug, discriminator, descriptor.serialName, cache) {
+            descriptorObjectDefinition(descriptor, json, cache, slugOwners)
         }
-        cache[slug] = schema.withDiscriminator(discriminator, descriptor.serialName, json)
-        return ReferenceDefinition("$COMPONENT_SLUG/$slug")
     }
 
-    private fun SerialDescriptor.classDiscriminator(json: Json): String =
-        annotations.filterIsInstance<JsonClassDiscriminator>().firstOrNull()?.discriminator
+    private fun SerialDescriptor?.classDiscriminator(json: Json): String =
+        this?.annotations?.filterIsInstance<JsonClassDiscriminator>()?.firstOrNull()?.discriminator
             ?: json.configuration.classDiscriminator
 
-    private fun TypeDefinition.withDiscriminator(
+    // The slug's identity limits a cached entry to this variant's placeholder, plain use, or same tag.
+    private fun taggedVariant(
+        slug: String,
         discriminator: String,
         serialName: String,
-        json: Json,
-    ): TypeDefinition {
-        if (json.configuration.classDiscriminatorMode == ClassDiscriminatorMode.NONE) {
-            throw UnsupportedSchemaException(
-                "Cannot describe sealed variant '$serialName': ClassDiscriminatorMode.NONE leaves the discriminator " +
-                    "out on encode, but decoding still requires it",
-            )
-        }
-        if (json.configuration.useArrayPolymorphism) {
-            throw UnsupportedSchemaException(
-                "Cannot describe sealed variant '$serialName': useArrayPolymorphism encodes it as an array",
-            )
-        }
-        val tag = EnumDefinition(enum = setOf(serialName))
-        val declared = properties.orEmpty()[discriminator]
-        // A plain component reached again through the same discriminator already carries this tag.
-        if (declared != null && declared != tag) {
-            throw UnsupportedSchemaException(
-                "Sealed variant '$serialName' has a property '$discriminator' that clashes with its discriminator",
-            )
-        }
-        return copy(
-            required = required.orEmpty() + discriminator,
-            properties = properties.orEmpty() + (discriminator to tag),
+        cache: MutableMap<String, JsonSchema>,
+        build: () -> TypeDefinition,
+    ): JsonSchema {
+        val reference = ReferenceDefinition("$COMPONENT_SLUG/$slug")
+        val cached = cache[slug]
+        cached?.let { if (it == reference || it !is TypeDefinition || it.type != "object") return it }
+        cache[slug] = reference
+        val base = cached as? TypeDefinition ?: build()
+        cache[slug] = base.copy(
+            required = base.required.orEmpty() + discriminator,
+            properties = base.properties.orEmpty() + (discriminator to EnumDefinition(enum = setOf(serialName))),
         )
+        return reference
+    }
+
+    private fun refuseUndescribable(variant: String, names: Iterable<String>, discriminator: String, json: Json) {
+        val reason = when {
+            json.configuration.classDiscriminatorMode == ClassDiscriminatorMode.NONE ->
+                "ClassDiscriminatorMode.NONE leaves the discriminator out on encode, but decoding requires it"
+            json.configuration.useArrayPolymorphism -> "useArrayPolymorphism encodes it as an array"
+            discriminator in names -> "kotlinx refuses to encode its property '$discriminator' next to the tag"
+            else -> return
+        }
+        throw UnsupportedSchemaException("Cannot describe sealed variant '$variant': $reason")
+    }
+
+    private fun Json.refuseAllJsonObjects() {
+        if (configuration.classDiscriminatorMode == ClassDiscriminatorMode.ALL_JSON_OBJECTS) {
+            throw UnsupportedSchemaException(
+                "ClassDiscriminatorMode.ALL_JSON_OBJECTS adds a discriminator to every object, which the schema " +
+                    "does not describe",
+            )
+        }
     }
 
     // --- KType-based entry points (bridge to descriptor-based implementation) ---
@@ -315,6 +320,7 @@ object SchemaGenerator {
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
+        json.refuseAllJsonObjects()
         val slug = type.slug(slugOwners)
         cache[slug]?.let { return it }
         return when (val clazz = type.classifier as KClass<*>) {
@@ -342,7 +348,7 @@ object SchemaGenerator {
         json: Json,
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
-    ): JsonSchema = degradeToObject {
+    ): JsonSchema = degradeToObject(TypeDefinition(type = "object")) {
         when {
             clazz.isSubclassOf(Enum::class) -> handleEnum(type, clazz, cache, slugOwners)
             clazz.isSubclassOf(Collection::class) -> handleCollection(type, json, cache, slugOwners)
@@ -353,12 +359,12 @@ object SchemaGenerator {
         }
     }
 
-    private inline fun degradeToObject(schema: () -> JsonSchema): JsonSchema = try {
+    private inline fun <S : JsonSchema> degradeToObject(fallback: S, schema: () -> S): S = try {
         schema()
     } catch (e: UnsupportedSchemaException) {
         throw e
     } catch (_: Exception) {
-        TypeDefinition(type = "object")
+        fallback
     }
 
     private fun handleEnum(
@@ -442,7 +448,7 @@ object SchemaGenerator {
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
-        val discriminator = outer.classDiscriminator(json)
+        val discriminator = outer.kotlinxDescriptor(json).classDiscriminator(json)
         val subclasses = clazz.sealedSubclasses
             .map { it.createType(type.arguments) }
             .map { t ->
@@ -467,40 +473,29 @@ object SchemaGenerator {
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
-        val ownComponent = type.classDiscriminator(json) == discriminator
-        val schema = when {
-            ownComponent || clazz.isSubclassOf(Enum::class) -> fromTypeToSchema(type, json, cache, slugOwners)
-            clazz.primaryConstructor == null -> TypeDefinition(type = "object")
-            else -> degradeToObject { objectDefinition(type, clazz, json, cache, slugOwners) }
+        if (clazz.isSubclassOf(Enum::class)) return fromTypeToSchema(type, json, cache, slugOwners)
+        val descriptor = type.kotlinxDescriptor(json)
+        val serialName = descriptor?.serialName
+            ?: clazz.findAnnotation<SerialName>()?.value
+            ?: checkNotNull(clazz.qualifiedName)
+        refuseUndescribable(serialName, descriptor?.elementNames ?: listOf(), discriminator, json)
+        val slug = when (descriptor.classDiscriminator(json) == discriminator) {
+            true -> type.slug(slugOwners, discriminator)
+            false -> type.foreignVariantSlug(outer, slugOwners)
         }
-        if (schema !is TypeDefinition || schema.type != "object") return schema
-        val slug = when (ownComponent) {
-            true -> type.slug(slugOwners)
-            false -> type.hierarchySlug(outer, slugOwners)
+        return taggedVariant(slug, discriminator, serialName, cache) {
+            degradeToObject(TypeDefinition(type = "object")) {
+                when (clazz.primaryConstructor) {
+                    null -> TypeDefinition(type = "object")
+                    else -> objectDefinition(type, clazz, json, cache, slugOwners)
+                }
+            }
         }
-        cache[slug] = schema.withDiscriminator(discriminator, type.serialName(json), json)
-        return ReferenceDefinition("$COMPONENT_SLUG/$slug")
-    }
-
-    private fun KType.classDiscriminator(json: Json): String =
-        kotlinxSerializer(json)?.descriptor?.classDiscriminator(json)
-            ?: (classifier as KClass<*>).declaredDiscriminator()
-            ?: json.configuration.classDiscriminator
-
-    // Without a serializer, mirror the plugin: the class's own annotation, then its supertypes' in declaration order.
-    private fun KClass<*>.declaredDiscriminator(): String? =
-        (listOf(this) + allSuperclasses).firstNotNullOfOrNull { it.findAnnotation<JsonClassDiscriminator>() }
-            ?.discriminator
-
-    private fun KType.serialName(json: Json): String {
-        kotlinxSerializer(json)?.let { return it.descriptor.serialName }
-        val clazz = classifier as KClass<*>
-        return clazz.findAnnotation<SerialName>()?.value ?: checkNotNull(clazz.qualifiedName)
     }
 
     // kotlinx throws on star projections instead of returning null.
-    private fun KType.kotlinxSerializer(json: Json): KSerializer<Any?>? = try {
-        json.serializersModule.serializerOrNull(this)
+    private fun KType.kotlinxDescriptor(json: Json): SerialDescriptor? = try {
+        json.serializersModule.serializerOrNull(this)?.descriptor
     } catch (_: IllegalArgumentException) {
         null
     }

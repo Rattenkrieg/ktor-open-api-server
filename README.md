@@ -237,7 +237,7 @@ Schemas are generated from `@Serializable` types using `kotlinx.serialization` d
 - `@EncodeDefault(NEVER)` — optional fields
 - `@Contextual` — resolved via `SerializersModule`, well-known fallbacks, or `customTypes`
 - Inline value classes — unwrapped automatically
-- Sealed classes — `anyOf` with the discriminator kotlinx writes: `@JsonClassDiscriminator` on the parent, else `classDiscriminator` (default `type`). `ClassDiscriminatorMode.NONE` and `useArrayPolymorphism` are not supported.
+- Sealed classes — `anyOf` with the discriminator kotlinx writes: `@JsonClassDiscriminator` on the parent, else `classDiscriminator` (default `type`). When a parent tags a variant with a name other than the one the variant inherits, that parent gets its own `<Parent>.<Variant>` component. Spec generation fails at startup for `ClassDiscriminatorMode.NONE` or `ALL_JSON_OBJECTS`, for `useArrayPolymorphism`, and for a variant property named like the discriminator.
 
 ### `@Contextual` types
 
