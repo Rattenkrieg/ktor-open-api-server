@@ -47,10 +47,9 @@ private fun resolveSlug(
     // recomputing a fresh one on every repeated collision.
     slugOwners.entries.firstOrNull { it.value == identity }?.let { return it.key.value }
     val disambiguated = longSlug()
-    if (slugOwners.claim(disambiguated, identity)) return disambiguated
     val unique = "${disambiguated}_${Integer.toHexString(identity.hashCode())}"
-    slugOwners[SchemaSlug(unique)] = identity
-    return unique
+    return (sequenceOf(disambiguated, unique) + generateSequence(1) { it + 1 }.map { "${unique}_$it" })
+        .first { slugOwners.claim(it, identity) }
 }
 
 private fun MutableMap<SchemaSlug, ClassIdentity>.claim(slug: String, identity: ClassIdentity): Boolean {
@@ -102,9 +101,9 @@ private fun shapeHash(shape: ClassIdentity.ByShape): String =
 @OptIn(ExperimentalSerializationApi::class)
 fun SerialDescriptor.slug(
     slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
-    outerSlug: String? = null,
     discriminator: String? = null,
     parent: String? = null,
+    outerSlug: String? = null,
 ): String {
     val name = serialName.removeSuffix("?")
     val shortSlug = shortSlugParts(name).joinToString("")
@@ -123,7 +122,7 @@ fun SerialDescriptor.slug(
 fun SerialDescriptor.referenceSlug(
     slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     outerSlug: String? = null,
-): String = "$COMPONENT_SLUG/${slug(slugOwners, outerSlug)}"
+): String = "$COMPONENT_SLUG/${slug(slugOwners, outerSlug = outerSlug)}"
 
 private fun KClass<*>.schemaSlug(
     slugOwners: MutableMap<SchemaSlug, ClassIdentity>,

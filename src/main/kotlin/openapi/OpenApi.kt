@@ -27,7 +27,6 @@ import openapi.schema.slug
 import openapi.schema.ArrayDefinition
 import openapi.schema.EnumDefinition
 import openapi.schema.ReferenceDefinition
-import openapi.schema.COMPONENT_SLUG
 import openapi.schema.referenceSlug
 import org.slf4j.LoggerFactory
 import kotlin.reflect.KClass
@@ -317,7 +316,13 @@ private fun schemaFromType(
 ): JsonSchema {
     val schema = try {
         val serializer = json.serializersModule.serializer(type)
-        SchemaGenerator.fromDescriptor(serializer.descriptor, json, cache, slugOwners)
+        // Work on copies, so a failed attempt leaves nothing for the fallback to find.
+        val attemptCache = cache.toMutableMap()
+        val attemptOwners = slugOwners.toMutableMap()
+        SchemaGenerator.fromDescriptor(serializer.descriptor, json, attemptCache, attemptOwners).also {
+            cache.putAll(attemptCache)
+            slugOwners.putAll(attemptOwners)
+        }
     } catch (e: UnsupportedSchemaException) {
         throw e
     } catch (e: Exception) {
@@ -326,8 +331,6 @@ private fun schemaFromType(
             type,
             e.message,
         )
-        // The failed attempt leaves its placeholders behind, and the fallback would return them as components.
-        cache.entries.removeIf { (slug, schema) -> schema == ReferenceDefinition("$COMPONENT_SLUG/$slug") }
         SchemaGenerator.fromTypeToSchema(type, json, cache, slugOwners)
     }
     if (schema is TypeDefinition && schema.properties != null || schema is EnumDefinition) {

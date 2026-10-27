@@ -266,6 +266,62 @@ sealed interface DescClaimHolder {
 }
 
 @Serializable
+sealed interface DescClaimThird
+
+@Serializable
+@Suppress("ClassName")
+data class DescClaimHolderLEAF_ea34ef61(val third: String) : DescClaimThird
+
+// Both variants lose "Leaf" to DescLeafSquatter, and their shared long slug "abLeaf" to the class abLeaf.
+@Serializable
+@SerialName("Leaf")
+data class DescLeafSquatter(val s: String)
+
+@Serializable
+@Suppress("ClassName")
+data class abLeaf(val t: String)
+
+@Serializable
+sealed interface DescDotA {
+    @Serializable
+    @SerialName("a.b.Leaf")
+    data class X(val x: Int) : DescDotA
+}
+
+@Serializable
+sealed interface DescDotB {
+    @Serializable
+    @SerialName("ab.Leaf")
+    data class Y(val y: Int) : DescDotB
+}
+
+// Same serial name and shape in two parents: one class identity, which keeps the first long slug it gets.
+@Serializable
+@SerialName("SHARED_LEAF")
+data class DescSharedLeafSquatter(val other: String)
+
+@Serializable
+sealed interface DescSharedLeafA {
+    @Serializable
+    @SerialName("SHARED_LEAF")
+    data class Leaf(val v: Int) : DescSharedLeafA
+}
+
+@Serializable
+sealed interface DescSharedLeafB {
+    @Serializable
+    @SerialName("SHARED_LEAF")
+    data class Leaf(val v: Int) : DescSharedLeafB
+}
+
+@Serializable
+sealed interface DescGenericResult<T> {
+    @Serializable
+    @SerialName("VALUE")
+    data class Value<T>(val value: T) : DescGenericResult<T>
+}
+
+@Serializable
 @SerialName("x.OK")
 data class DescOkSquatter(val other: String)
 
@@ -1245,6 +1301,30 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
             variant("type", "B", mapOf("b" to TypeDefinition.INT))
     }
 
+    should("keep sealed types documented under two Json configurations apart via the reflection-based path") {
+        val statusJson = Json { classDiscriminator = "status" }
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val generic = typeOf<DescGenericResult<Int>>()
+        val genericSerializer = DescGenericResult.serializer(Int.serializer())
+        val values = listOf(DescGenericResult.Value(1))
+        val typed = SchemaGenerator.fromTypeToSchema(generic, json, cache, slugOwners)
+        val statused = SchemaGenerator.fromTypeToSchema(generic, statusJson, cache, slugOwners)
+        shouldMatchWire(typed, cache, json, genericSerializer, values)
+        shouldMatchWire(statused, cache, statusJson, genericSerializer, values)
+        SchemaGenerator.fromTypeToSchema(typeOf<DescDottedOuter>(), json, cache, slugOwners)
+        val dotted = SchemaGenerator.fromTypeToSchema(typeOf<DescDottedOuter>(), statusJson, cache, slugOwners)
+        dotted.objectVariants(cache).size shouldBe 4
+        dotted.shouldBeInstanceOf<AnyOfDefinition>().anyOf.flatMap { (it as? AnyOfDefinition)?.anyOf ?: setOf(it) }
+            .map { it.shouldBeInstanceOf<ReferenceDefinition>().`$ref`.removePrefix("#/components/schemas/") }
+            .toSet() shouldBe setOf(
+                "DescDottedOuter.openapiDescDottedOuterInnerUnnamed",
+                "DescDottedOuter.openapiDescDottedOuterInnerXLeaf",
+                "DescDottedOuter.openapiDescDottedOuterInnerYLeaf",
+                "openapiDescDottedOuterOther",
+            )
+    }
+
     should("give a shared variant one component per discriminator via the reflection-based schema path") {
         val outer = typeOf<DescNestedOuter>()
         val inner = typeOf<DescNestedOuter.Inner>()
@@ -1352,8 +1432,7 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         )
         shouldThrow<UnsupportedSchemaException> {
             SchemaGenerator.fromDescriptor(DescAnnotatedResult.serializer().descriptor, json, cache, mutableMapOf())
-        }.message shouldBe "Cannot describe sealed variant 'CREATED': its cached schema already sets 'status' to " +
-            "EnumDefinition(enum=[OTHER], type=null)"
+        }.message shouldBe "Cannot describe sealed variant 'CREATED': its cached schema already sets 'status' to OTHER"
     }
 
     should("give a variant whose long slug another class owns a slug of its own") {
@@ -1366,6 +1445,55 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         holder shouldBe AnyOfDefinition(setOf(ReferenceDefinition("#/components/schemas/DescClaimHolderLEAF_ea34ef61")))
         shouldMatchWire(other, cache, json, DescClaimOther.serializer(), listOf(DescClaimHolderLEAF("o")))
         shouldMatchWire(holder, cache, json, DescClaimHolder.serializer(), listOf(DescClaimHolder.V(1)))
+    }
+
+    should("give each claimant of a taken long slug a name derived from its own identity, in any order") {
+        val kindJson = Json { classDiscriminator = "kind" }
+        fun generate(vararg runs: Pair<SerialDescriptor, Json>): Pair<List<JsonSchema>, Map<String, JsonSchema>> {
+            val cache = mutableMapOf<String, JsonSchema>()
+            val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+            return runs.map { (descriptor, config) ->
+                SchemaGenerator.fromDescriptor(descriptor, config, cache, slugOwners)
+            } to cache
+        }
+        fun refTo(slug: String) = AnyOfDefinition(setOf(ReferenceDefinition("#/components/schemas/$slug")))
+        val leafSquatter = DescPlainSlugSquatter.serializer().descriptor to json
+        val longSquatter = DescClaimOther.serializer().descriptor to json
+        val holder = DescClaimHolder.serializer().descriptor
+        val (typeFirst, typeFirstCache) = generate(leafSquatter, longSquatter, holder to json, holder to kindJson)
+        val (kindFirst, _) = generate(leafSquatter, longSquatter, holder to kindJson, holder to json)
+        typeFirst.takeLast(2) shouldBe
+            listOf(refTo("DescClaimHolderLEAF_ea34ef61"), refTo("DescClaimHolderLEAF_e9aece47"))
+        kindFirst.takeLast(2).reversed() shouldBe typeFirst.takeLast(2)
+        val values = listOf(DescClaimHolder.V(1))
+        shouldMatchWire(typeFirst[2], typeFirstCache, json, DescClaimHolder.serializer(), values)
+        shouldMatchWire(typeFirst[3], typeFirstCache, kindJson, DescClaimHolder.serializer(), values)
+        val squatters = arrayOf(
+            DescLeafSquatter.serializer().descriptor to json,
+            abLeaf.serializer().descriptor to json,
+        )
+        val dotA = DescDotA.serializer().descriptor to json
+        val dotB = DescDotB.serializer().descriptor to json
+        val (aFirst, _) = generate(*squatters, dotA, dotB)
+        val (bFirst, _) = generate(*squatters, dotB, dotA)
+        aFirst.takeLast(2) shouldBe listOf(refTo("abLeaf_7ba25fd"), refTo("abLeaf_1886671"))
+        bFirst.takeLast(2).reversed() shouldBe aFirst.takeLast(2)
+        val third = DescClaimThird.serializer().descriptor to json
+        val (withHashNamedClass, hashCache) = generate(leafSquatter, longSquatter, third, holder to json)
+        withHashNamedClass[3] shouldBe refTo("DescClaimHolderLEAF_ea34ef61_1")
+        val hashNamed = listOf(DescClaimHolderLEAF_ea34ef61("t"))
+        shouldMatchWire(withHashNamedClass[2], hashCache, json, DescClaimThird.serializer(), hashNamed)
+        shouldMatchWire(withHashNamedClass[3], hashCache, json, DescClaimHolder.serializer(), values)
+    }
+
+    should("reuse the long slug of a class identity reached again under another parent") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        SchemaGenerator.fromDescriptor(DescSharedLeafSquatter.serializer().descriptor, json, cache, slugOwners)
+        val a = SchemaGenerator.fromDescriptor(DescSharedLeafA.serializer().descriptor, json, cache, slugOwners)
+        val b = SchemaGenerator.fromDescriptor(DescSharedLeafB.serializer().descriptor, json, cache, slugOwners)
+        a shouldBe AnyOfDefinition(setOf(ReferenceDefinition("#/components/schemas/DescSharedLeafASHARED_LEAF")))
+        b shouldBe a
     }
 
     should("give same-shaped plain classes with different serial names their own components") {

@@ -239,6 +239,10 @@ Schemas are generated from `@Serializable` types using `kotlinx.serialization` d
 - Inline value classes — unwrapped automatically
 - Sealed classes — `anyOf` with the discriminator kotlinx writes: `@JsonClassDiscriminator` on the parent, else `classDiscriminator` (default `type`). When a parent tags a variant with a name other than the one the variant inherits, that parent gets its own `<Parent>.<Variant>` component. Spec generation fails at startup for `ClassDiscriminatorMode.NONE`, for `useArrayPolymorphism`, and for a variant property named like the discriminator. Under `ClassDiscriminatorMode.ALL_JSON_OBJECTS`, kotlinx also writes the discriminator into plain objects, and their schemas do not list it.
 
+A component takes the serial name of its class without the package, so `com.example.Outer.Inner` becomes `OuterInner`. When another class already has that name, it takes a longer name, usually the qualified name without dots. When that is taken too, it takes `<name>_<hex>`, where `<hex>` is a hash of the class identity (its qualified name, plus the discriminator and parent for a sealed variant).
+
+When a body type's descriptor throws, for example from a hand-written serializer, the plugin logs a warning and builds the schema of that type from Kotlin reflection. Its components are named after the Kotlin classes, not their `@SerialName`, and their properties follow the class with `@SerialName` and `@Transient` applied, not the serializer, so they can differ from the wire format. A part that reflection cannot describe becomes `{"type": "object"}`.
+
 ### `@Contextual` types
 
 Fields annotated with `@Contextual` (e.g., `UUID`, `Instant`) are resolved in this order:

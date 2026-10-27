@@ -31,8 +31,10 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -117,6 +119,25 @@ data class NoDescriptor(val value: Int)
 data class NoDescriptorHolder(val inner: NoDescriptor)
 
 data class NoDescriptorResponse(val body: ResponseBody<NoDescriptorHolder>) : OkResponsePayload()
+
+// The descriptor attempt finishes CycleBack, which refers to "Alpha", before NoDescriptor fails it.
+@Serializable
+@SerialName("Alpha")
+data class AliasedCycle(val back: CycleBack, val broken: NoDescriptor)
+
+@Serializable
+data class CycleBack(val forward: AliasedCycle?)
+
+@Serializable
+data class CycleHolder(val cycle: AliasedCycle)
+
+data class CycleResponse(val body: ResponseBody<CycleHolder>) : OkResponsePayload()
+
+// Both attempts fail: the descriptor on NoDescriptor, the reflection path on the Map<String, T> property.
+@Serializable
+data class GenericBroken<T>(val values: Map<String, T>, val broken: NoDescriptor)
+
+data class GenericBrokenResponse(val body: ResponseBody<GenericBroken<Int>>) : OkResponsePayload()
 
 data class ClashingResponse(val body: ResponseBody<DescClashingVariant>) : OkResponsePayload()
 
@@ -547,7 +568,14 @@ class OpenApiIntegrationTest : ShouldSpec({
         conflict.message shouldContain "'openapi.DescUnnamedVariants.First'"
     }
 
-    should("emit no half-built component when the reflection path takes over") {
+    should("emit only resolvable references when the reflection path takes over") {
+        fun JsonElement.refs(): List<String> = when (this) {
+            is JsonObject -> entries.flatMap { (key, value) ->
+                if (key == "${'$'}ref") listOf(value.jsonPrimitive.content) else value.refs()
+            }
+            is JsonArray -> flatMap { it.refs() }
+            is JsonPrimitive -> listOf()
+        }
         testApplication {
             install(ContentNegotiation) { json() }
             install(OpenApi) {
@@ -558,13 +586,22 @@ class OpenApiIntegrationTest : ShouldSpec({
                 get<NoParamsPayload, NoDescriptorResponse>("/no-descriptor") {
                     NoDescriptorResponse(ResponseBody(NoDescriptorHolder(NoDescriptor(1))))
                 }
+                get<NoParamsPayload, CycleResponse>("/cycle") {
+                    CycleResponse(ResponseBody(CycleHolder(AliasedCycle(CycleBack(null), NoDescriptor(1)))))
+                }
+                get<NoParamsPayload, GenericBrokenResponse>("/generic") {
+                    GenericBrokenResponse(ResponseBody(GenericBroken(mapOf("a" to 1), NoDescriptor(1))))
+                }
             }
             val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
             val schemas = specJson.at("components", "schemas").jsonObject
+            specJson.refs().filterNot { it.removePrefix("#/components/schemas/") in schemas } shouldBe listOf()
             schemas.filter { (name, schema) ->
                 schema == Json.parseToJsonElement("""{"${'$'}ref": "#/components/schemas/$name"}""")
             }.keys shouldBe setOf()
-            schemas.getValue("NoDescriptorHolder").jsonObject.at("properties").jsonObject.keys shouldBe setOf("inner")
+            fun propertiesOf(name: String) = schemas.getValue(name).jsonObject.at("properties").jsonObject.keys
+            propertiesOf("NoDescriptorHolder") shouldBe setOf("inner")
+            propertiesOf("AliasedCycle") shouldBe setOf("back", "broken")
         }
     }
 

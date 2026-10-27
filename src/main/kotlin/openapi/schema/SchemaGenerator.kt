@@ -61,7 +61,7 @@ object SchemaGenerator {
         val selfCaching = descriptor.kind == SerialKind.ENUM ||
             descriptor.kind == StructureKind.CLASS ||
             descriptor.kind == StructureKind.OBJECT
-        val slug = if (selfCaching) descriptor.slug(slugOwners, outerSlug) else descriptor.plainSlug()
+        val slug = if (selfCaching) descriptor.slug(slugOwners, outerSlug = outerSlug) else descriptor.plainSlug()
         cache[slug]?.let { return it }
         return when (descriptor.kind) {
             PrimitiveKind.STRING -> TypeDefinition.STRING
@@ -139,11 +139,23 @@ object SchemaGenerator {
             return TypeDefinition(type = "object")
         }
         val slug = descriptor.slug(slugOwners)
-        val referenceSlug = descriptor.referenceSlug(slugOwners)
-        cache[slug] = ReferenceDefinition(referenceSlug)
-        val definition = descriptorObjectDefinition(descriptor, json, cache, slugOwners)
+        val definition = cache.withPlaceholder(slug) { descriptorObjectDefinition(descriptor, json, cache, slugOwners) }
         cache[slug] = definition
         return definition
+    }
+
+    // A failed build removes its placeholder, so it cannot be published as a component that references itself.
+    private inline fun <S : JsonSchema> MutableMap<String, JsonSchema>.withPlaceholder(
+        slug: String,
+        build: () -> S,
+    ): S {
+        this[slug] = ReferenceDefinition("$COMPONENT_SLUG/$slug")
+        return try {
+            build()
+        } catch (e: Exception) {
+            remove(slug)
+            throw e
+        }
     }
 
     private fun descriptorObjectDefinition(
@@ -262,9 +274,7 @@ object SchemaGenerator {
         refuseUndescribable(descriptor.serialName, descriptor.elementNames, discriminator, json)
         val slug = when (descriptor.classDiscriminator(json) == discriminator) {
             true -> descriptor.slug(slugOwners, outerSlug = outerSlug, discriminator = discriminator)
-            false -> descriptor.slug(
-                slugOwners, outerSlug = outerSlug, discriminator = discriminator, parent = outerSlug,
-            )
+            false -> descriptor.slug(slugOwners, discriminator = discriminator, parent = outerSlug)
         }
         return taggedVariant(slug, discriminator, descriptor.serialName, cache) {
             descriptorObjectDefinition(descriptor, json, cache, slugOwners)
@@ -289,12 +299,13 @@ object SchemaGenerator {
         cached?.let { if (it !is TypeDefinition || it.type != "object") return it }
         val existing = cached as? TypeDefinition
         existing?.properties?.get(discriminator)?.takeIf { it != tag }?.let {
+            val values = (it as? EnumDefinition)?.enum?.joinToString() ?: it
             throw UnsupportedSchemaException(
-                "Cannot describe sealed variant '$serialName': its cached schema already sets '$discriminator' to $it",
+                "Cannot describe sealed variant '$serialName': its cached schema already sets '$discriminator' " +
+                    "to $values",
             )
         }
-        cache[slug] = reference
-        val base = existing ?: build()
+        val base = existing ?: cache.withPlaceholder(slug, build)
         cache[slug] = base.copy(
             required = base.required.orEmpty() + discriminator,
             properties = base.properties.orEmpty() + (discriminator to tag),
@@ -373,7 +384,6 @@ object SchemaGenerator {
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
-        cache[type.slug(slugOwners)] = ReferenceDefinition(type.referenceSlug(slugOwners))
         val options = clazz.java.enumConstants.map { it.toString() }.toSet()
         return EnumDefinition(enum = options)
     }
@@ -508,9 +518,7 @@ object SchemaGenerator {
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
         val slug = type.slug(slugOwners)
-        val referenceSlug = type.referenceSlug(slugOwners)
-        cache[slug] = ReferenceDefinition(referenceSlug)
-        val definition = objectDefinition(type, clazz, json, cache, slugOwners)
+        val definition = cache.withPlaceholder(slug) { objectDefinition(type, clazz, json, cache, slugOwners) }
         cache[slug] = definition
         return definition
     }
