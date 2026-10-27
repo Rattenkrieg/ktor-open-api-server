@@ -248,12 +248,15 @@ sealed interface DescStateOutcome {
 @Serializable
 data class DescOkHolder(val ok: DescStatusOutcome.Ok)
 
+@Serializable
+sealed interface DescDottedSecond
+
 // Both Leaf variants shorten to "Leaf" under DescDottedOuter, which tags them with a name that is not their own.
 @Serializable
 sealed interface DescDottedOuter {
     @Serializable
     @JsonClassDiscriminator("kind")
-    sealed interface Inner : DescDottedOuter {
+    sealed interface Inner : DescDottedOuter, DescDottedSecond {
         @Serializable
         @SerialName("x.Leaf")
         data class XLeaf(val x: Int) : Inner
@@ -1155,6 +1158,11 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         )
         cache["DescDottedOuter.Leaf"] shouldBe variant("type", "x.Leaf", mapOf("x" to TypeDefinition.INT))
         cache["DescDottedOuter.yLeaf"] shouldBe variant("type", "y.Leaf", mapOf("y" to TypeDefinition.STRING))
+        val second = SchemaGenerator.fromDescriptor(DescDottedSecond.serializer().descriptor, json, cache, slugOwners)
+        second shouldBe AnyOfDefinition(
+            listOf("DescDottedSecond.DescDottedOuterInnerUnnamed", "DescDottedSecond.Leaf", "DescDottedSecond.yLeaf")
+                .map { ReferenceDefinition("#/components/schemas/$it") }.toSet(),
+        )
         one shouldBe AnyOfDefinition(setOf(ReferenceDefinition("#/components/schemas/Hierarchy.NESTED")))
         two shouldBe AnyOfDefinition(
             setOf(ReferenceDefinition("#/components/schemas/openapifixturespkgtwoHierarchy.NESTED")),
