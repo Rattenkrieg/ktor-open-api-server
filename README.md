@@ -237,7 +237,7 @@ Schemas are generated from `@Serializable` types using `kotlinx.serialization` d
 - `@EncodeDefault(NEVER)` — optional fields
 - `@Contextual` — resolved via `SerializersModule`, well-known fallbacks, or `customTypes`
 - Inline value classes — unwrapped automatically
-- Sealed classes — `anyOf` with `type` discriminator
+- Sealed classes — `anyOf` with the discriminator kotlinx writes: `@JsonClassDiscriminator` on the parent, else `classDiscriminator` (default `type`). `ClassDiscriminatorMode.NONE` and `useArrayPolymorphism` are not supported.
 
 ### `@Contextual` types
 
