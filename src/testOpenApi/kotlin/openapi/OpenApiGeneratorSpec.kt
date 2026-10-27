@@ -2,6 +2,7 @@ package openapi
 
 import io.kotest.core.spec.style.ShouldSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.ktor.client.request.get
@@ -94,6 +95,9 @@ class OpenApiGeneratorSpec : ShouldSpec({
                             ),
                         )
                     }
+                    get<ListOrdersPayload, Ok<DescExpr>>("/expressions") {
+                        Ok(DescExpr.Lit(1))
+                    }
                     get<GetOrderPayload, Ok<Order>>("/{id}") {
                         Ok(
                             Order(
@@ -126,6 +130,7 @@ class OpenApiGeneratorSpec : ShouldSpec({
                 val files = generator.generate()
                 files.shouldNotBeNull()
                 val modelFiles = files.filter { it.path.contains("/models/") }
+                modelFiles.map { it.name } shouldContain "DescExprADD.ts"
                 modelFiles.size shouldBe files.filter { it.path.contains("/models/") }.size
 
                 val specContent = Json.decodeFromString<kotlinx.serialization.json.JsonObject>(specJson)
