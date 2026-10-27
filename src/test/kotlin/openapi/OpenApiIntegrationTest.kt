@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalSerializationApi::class)
+
 package openapi
 
 import openapi.oas.OpenApiSpec
@@ -14,8 +16,18 @@ import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.routing.*
 import io.ktor.server.testing.*
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.descriptors.element
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.encoding.encodeStructure
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -55,11 +67,41 @@ data class CompanyIdPayload(
 @Serializable
 data class TaskListResponse(val tasks: List<String>) : OkResponsePayload()
 
+class NoParamsPayload : RequestPayload
+
+data class ResultBodyPayload(val body: Body<DescAnnotatedResult>) : RequestPayload
+
+data class ResultResponse(val body: ResponseBody<DescAnnotatedResult>) : OkResponsePayload()
+
+data class NestedOuterResponse(val body: ResponseBody<DescNestedOuter>) : OkResponsePayload()
+
+data class NestedInnerResponse(val body: ResponseBody<DescNestedOuter.Inner>) : OkResponsePayload()
+
+// The variant's Kotlin property differs from the key its serializer writes, so only the descriptor sees the clash.
+object ClashingCustomSerializer : KSerializer<ClashingCustomResult.Variant> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("CLASHING") { element<String>("status") }
+    override fun serialize(encoder: Encoder, value: ClashingCustomResult.Variant) =
+        encoder.encodeStructure(descriptor) { encodeStringElement(descriptor, 0, value.code) }
+    override fun deserialize(decoder: Decoder): ClashingCustomResult.Variant = TODO("not used in test")
+}
+
+@Serializable
+@JsonClassDiscriminator("status")
+sealed interface ClashingCustomResult {
+    @Serializable(with = ClashingCustomSerializer::class)
+    data class Variant(val code: String) : ClashingCustomResult
+}
+
+data class ClashingResponse(val body: ResponseBody<ClashingCustomResult>) : OkResponsePayload()
+
 class OpenApiIntegrationTest : ShouldSpec({
 
     fun openApiSpec() = OpenApiSpec(
         info = Info(title = "HC API", version = "0.0.1", description = "Integration test"),
     )
+
+    fun JsonObject.at(vararg keys: String): JsonElement =
+        keys.fold<String, JsonElement>(this) { element, key -> element.jsonObject.getValue(key) }
 
     should("generate spec for principal-only payload and response with headers") {
         testApplication {
@@ -176,6 +218,125 @@ class OpenApiIntegrationTest : ShouldSpec({
             }
             val response = client.get("/openapi.json")
             response.status shouldBe HttpStatusCode.NotFound
+        }
+    }
+
+    should("document a sealed request and response body under the discriminator kotlinx reads and writes") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                serveOpenApiSpec("/openapi.json")
+                post<ResultBodyPayload, ResultResponse>("/results") {
+                    ResultResponse(ResponseBody(payload.body.value()))
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val schemas = specJson.getValue("components").jsonObject.getValue("schemas").jsonObject
+            schemas.getValue("CREATED") shouldBe Json.parseToJsonElement(
+                """
+                {
+                  "type": "object",
+                  "properties": {"id": {"type": "string"}, "status": {"enum": ["CREATED"]}},
+                  "required": ["id", "status"]
+                }
+                """,
+            )
+            schemas.getValue("PENDING") shouldBe Json.parseToJsonElement(
+                """{"type":"object","properties":{"status":{"enum":["PENDING"]}},"required":["status"]}""",
+            )
+            val resultSchema = Json.parseToJsonElement(
+                """
+                {"anyOf": [
+                  {"${'$'}ref": "#/components/schemas/CREATED"},
+                  {"${'$'}ref": "#/components/schemas/FAILED"},
+                  {"${'$'}ref": "#/components/schemas/PENDING"}
+                ]}
+                """,
+            )
+            val operation = specJson.at("paths", "/results", "post").jsonObject
+            operation.at("requestBody", "content", "application/json", "schema") shouldBe resultSchema
+            operation.at("responses", "200", "content", "application/json", "schema") shouldBe resultSchema
+            val response = client.post("/results") {
+                contentType(ContentType.Application.Json)
+                setBody("""{"status":"CREATED","id":"1"}""")
+            }
+            response.status shouldBe HttpStatusCode.OK
+            Json.parseToJsonElement(response.bodyAsText()) shouldBe
+                Json.parseToJsonElement("""{"status":"CREATED","id":"1"}""")
+        }
+    }
+
+    should("export the same spec whichever order routes sharing a sealed variant register in") {
+        fun exportedSpec(outerFirst: Boolean): JsonObject {
+            var exported = JsonObject(mapOf())
+            testApplication {
+                install(ContentNegotiation) { json() }
+                install(OpenApi) {
+                    spec = openApiSpec()
+                }
+                routing {
+                    serveOpenApiSpec("/openapi.json")
+                    val registrations = listOf<Route.() -> Unit>(
+                        {
+                            get<NoParamsPayload, NestedOuterResponse>("/outer") {
+                                NestedOuterResponse(ResponseBody(DescNestedOuter.Other(1)))
+                            }
+                        },
+                        {
+                            get<NoParamsPayload, NestedInnerResponse>("/inner") {
+                                NestedInnerResponse(ResponseBody(DescNestedOuter.Inner.Leaf(1)))
+                            }
+                        },
+                    )
+                    (if (outerFirst) registrations else registrations.reversed()).forEach { it() }
+                }
+                exported = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            }
+            return exported
+        }
+        val outerFirst = exportedSpec(outerFirst = true)
+        exportedSpec(outerFirst = false) shouldBe outerFirst
+        val schemas = outerFirst.getValue("components").jsonObject.getValue("schemas").jsonObject
+        schemas.getValue("LEAF") shouldBe Json.parseToJsonElement(
+            """
+            {
+              "type": "object",
+              "properties": {"value": {"type": "number", "format": "int32"}, "kind": {"enum": ["LEAF"]}},
+              "required": ["value", "kind"]
+            }
+            """,
+        )
+        schemas.getValue("DescNestedOuterLEAF") shouldBe Json.parseToJsonElement(
+            """
+            {
+              "type": "object",
+              "properties": {"value": {"type": "number", "format": "int32"}, "type": {"enum": ["LEAF"]}},
+              "required": ["value", "type"]
+            }
+            """,
+        )
+        val innerSchema = outerFirst.at("paths", "/inner", "get", "responses", "200", "content", "application/json")
+            .jsonObject.getValue("schema")
+        innerSchema shouldBe Json.parseToJsonElement("""{"anyOf": [{"${'$'}ref": "#/components/schemas/LEAF"}]}""")
+    }
+
+    should("leave a route out of the spec when its sealed body cannot be described") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                serveOpenApiSpec("/openapi.json")
+                get<NoParamsPayload, ClashingResponse>("/clashing") {
+                    ClashingResponse(ResponseBody(ClashingCustomResult.Variant("x")))
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            specJson["paths"]?.jsonObject?.get("/clashing") shouldBe null
         }
     }
 })

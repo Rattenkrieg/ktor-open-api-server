@@ -7,7 +7,7 @@ import kotlinx.serialization.descriptors.capturedKClass
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 
-private const val COMPONENT_SLUG = "#/components/schemas"
+internal const val COMPONENT_SLUG = "#/components/schemas"
 
 /** A candidate schema component name, e.g. "Status", before collision resolution. */
 @JvmInline
@@ -22,6 +22,7 @@ value class SchemaSlug(val value: String)
 sealed class ClassIdentity {
     data class ByQualifiedName(val name: String) : ClassIdentity()
     data class ByShape(val kind: String, val elementNames: List<String>) : ClassIdentity()
+    data class InHierarchy(val hierarchySlug: String, val variantSlug: String) : ClassIdentity()
 }
 
 private fun resolveSlug(
@@ -103,4 +104,20 @@ private fun KClass<*>.schemaSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentit
     val qualifiedName = qualifiedName ?: return simpleName!!
     val shortSlug = qualifiedName.replace(pkg, "").replace(".", "")
     return resolveSlug(shortSlug, ClassIdentity.ByQualifiedName(qualifiedName), slugOwners) { qualifiedName.replace(".", "") }
+}
+
+// A sealed variant tagged with a discriminator other than its own gets one component per hierarchy.
+@OptIn(ExperimentalSerializationApi::class)
+fun SerialDescriptor.hierarchySlug(outerSlug: String, slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
+    resolveHierarchySlug(outerSlug, slug(slugOwners, outerSlug), slugOwners)
+
+fun KType.hierarchySlug(outer: KType, slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
+    resolveHierarchySlug(outer.slug(slugOwners), slug(slugOwners), slugOwners)
+
+private fun resolveHierarchySlug(
+    outerSlug: String,
+    variantSlug: String,
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+): String = resolveSlug("$outerSlug$variantSlug", ClassIdentity.InHierarchy(outerSlug, variantSlug), slugOwners) {
+    "${outerSlug}_$variantSlug"
 }

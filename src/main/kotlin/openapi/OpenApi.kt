@@ -14,6 +14,7 @@ import openapi.schema.JsonSchema
 import openapi.schema.SchemaGenerator
 import openapi.schema.SchemaSlug
 import openapi.schema.TypeDefinition
+import openapi.schema.UnsupportedSchemaException
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -316,6 +317,8 @@ private fun schemaFromType(
     val schema = try {
         val serializer = json.serializersModule.serializer(type)
         SchemaGenerator.fromDescriptor(serializer.descriptor, json, cache, slugOwners)
+    } catch (e: UnsupportedSchemaException) {
+        throw e
     } catch (e: Exception) {
         logger.warn(
             "Descriptor-based schema generation failed for {}, falling back to reflection: {}",
