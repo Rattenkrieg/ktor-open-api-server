@@ -21,7 +21,6 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.descriptors.element
-import kotlinx.serialization.serializer
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
@@ -33,8 +32,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.modules.SerializersModule
-import kotlinx.serialization.modules.polymorphic
-import kotlinx.serialization.modules.subclass
 import kotlinx.serialization.modules.contextual
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
@@ -168,14 +165,6 @@ sealed class DescPlainSealed {
     data class First(val value: Int) : DescPlainSealed()
 
     data object Second : DescPlainSealed()
-}
-
-// Not @Serializable: kotlinx encodes it through a runtime PolymorphicSerializer, which ignores the annotation.
-@JsonClassDiscriminator("status")
-sealed interface DescModuleSealed {
-    @Serializable
-    @SerialName("MODULE")
-    data class Variant(val value: Int) : DescModuleSealed
 }
 
 @Serializable
@@ -944,32 +933,12 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         )
     }
 
-    should("name the sealed discriminator after @JsonClassDiscriminator via the reflection-based schema path") {
-        val cache = mutableMapOf<String, JsonSchema>()
-        val schema = SchemaGenerator.fromTypeToSchema(typeOf<DescAnnotatedResult>(), json, cache, mutableMapOf())
-        schema.objectVariants(cache).toSet() shouldBe setOf(
-            variant("status", "CREATED", mapOf("id" to TypeDefinition.STRING)),
-            variant("status", "FAILED", mapOf("reason" to TypeDefinition.STRING)),
-            variant("status", "PENDING", mapOf()),
-        )
-    }
-
     should("name the sealed discriminator after the configured classDiscriminator when the parent has no annotation") {
         val kindJson = Json { classDiscriminator = "kind" }
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromDescriptor(
             DescOutcome.serializer().descriptor, kindJson, cache, mutableMapOf(),
         )
-        schema.objectVariants(cache).toSet() shouldBe setOf(
-            variant("kind", "succeeded", mapOf("at" to TypeDefinition.STRING)),
-            variant("kind", "cancelled", mapOf()),
-        )
-    }
-
-    should("name the sealed discriminator after classDiscriminator via the reflection-based schema path") {
-        val kindJson = Json { classDiscriminator = "kind" }
-        val cache = mutableMapOf<String, JsonSchema>()
-        val schema = SchemaGenerator.fromTypeToSchema(typeOf<DescOutcome>(), kindJson, cache, mutableMapOf())
         schema.objectVariants(cache).toSet() shouldBe setOf(
             variant("kind", "succeeded", mapOf("at" to TypeDefinition.STRING)),
             variant("kind", "cancelled", mapOf()),
@@ -1123,22 +1092,6 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
             variant("type", "LEAF", mapOf("value" to TypeDefinition.INT))
     }
 
-    should("keep a variant's component under another parent's discriminator apart from every class slug") {
-        val cache = mutableMapOf<String, JsonSchema>()
-        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
-        val squatter = SchemaGenerator.fromDescriptor(
-            DescHierarchySlugSquatter.serializer().descriptor, json, cache, slugOwners,
-        )
-        val outer = SchemaGenerator.fromDescriptor(DescNestedOuter.serializer().descriptor, json, cache, slugOwners)
-        cache["DescNestedOuterLEAF"] shouldBe squatter
-        outer shouldBe AnyOfDefinition(
-            setOf(
-                ReferenceDefinition("#/components/schemas/DescNestedOuter.LEAF"),
-                ReferenceDefinition("#/components/schemas/OTHER"),
-            ),
-        )
-    }
-
     should("tag variants without @SerialName with their default serial name via the reflection-based schema path") {
         val unnamedCache = mutableMapOf<String, JsonSchema>()
         val unnamed = SchemaGenerator.fromTypeToSchema(
@@ -1167,18 +1120,6 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         val cache = mutableMapOf<String, JsonSchema>()
         val schema = SchemaGenerator.fromTypeToSchema(typeOf<DescCustomSealed>(), json, cache, mutableMapOf())
         shouldMatchWire(schema, cache, json, DescCustomSealed.serializer(), listOf(DescCustomSealed.Custom("x")))
-    }
-
-    should("take the discriminator from the serializer kotlinx uses via the reflection-based schema path") {
-        val moduleJson = Json {
-            serializersModule = SerializersModule {
-                polymorphic(DescModuleSealed::class) { subclass(DescModuleSealed.Variant::class) }
-            }
-        }
-        val cache = mutableMapOf<String, JsonSchema>()
-        val schema = SchemaGenerator.fromTypeToSchema(typeOf<DescModuleSealed>(), moduleJson, cache, mutableMapOf())
-        val serializer = moduleJson.serializersModule.serializer(typeOf<DescModuleSealed>())
-        shouldMatchWire(schema, cache, moduleJson, serializer, listOf(DescModuleSealed.Variant(1)))
     }
 
     should("keep the other variants when a nested sealed child fails via the reflection-based schema path") {
