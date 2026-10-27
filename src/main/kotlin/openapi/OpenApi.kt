@@ -322,7 +322,7 @@ private fun schemaFromType(
             type,
             e.message,
         )
-        SchemaGenerator.fromTypeToSchema(type, cache, slugOwners)
+        SchemaGenerator.fromTypeToSchema(type, json, cache, slugOwners)
     }
     if (schema is TypeDefinition && schema.properties != null || schema is EnumDefinition) {
         val serializer = json.serializersModule.serializer(type)
