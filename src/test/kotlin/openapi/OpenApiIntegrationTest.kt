@@ -4,11 +4,13 @@ package openapi
 
 import openapi.oas.OpenApiSpec
 import openapi.oas.Info
+import openapi.schema.EnumDefinition
 import openapi.schema.TypeDefinition
 import openapi.schema.UnsupportedSchemaException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.ShouldSpec
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -21,8 +23,12 @@ import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.routing.*
 import io.ktor.server.testing.*
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -91,6 +97,26 @@ data class StateOutcomeResponse(val body: ResponseBody<DescStateOutcome>) : OkRe
 data class ExprResponse(val body: ResponseBody<DescExpr>) : OkResponsePayload()
 
 data class DottedResponse(val body: ResponseBody<DescDottedOuter>) : OkResponsePayload()
+
+@Serializable
+data class UnnamedHolder(val variant: DescUnnamedVariants)
+
+data class UnnamedHolderResponse(val body: ResponseBody<UnnamedHolder>) : OkResponsePayload()
+
+// Reading this descriptor fails, so descriptor-based generation stops half way through NoDescriptorHolder.
+object NoDescriptorSerializer : KSerializer<NoDescriptor> {
+    override val descriptor: SerialDescriptor get() = error("no descriptor")
+    override fun serialize(encoder: Encoder, value: NoDescriptor) = TODO("not used in test")
+    override fun deserialize(decoder: Decoder): NoDescriptor = TODO("not used in test")
+}
+
+@Serializable(with = NoDescriptorSerializer::class)
+data class NoDescriptor(val value: Int)
+
+@Serializable
+data class NoDescriptorHolder(val inner: NoDescriptor)
+
+data class NoDescriptorResponse(val body: ResponseBody<NoDescriptorHolder>) : OkResponsePayload()
 
 data class ClashingResponse(val body: ResponseBody<DescClashingVariant>) : OkResponsePayload()
 
@@ -497,8 +523,53 @@ class OpenApiIntegrationTest : ShouldSpec({
         }
     }
 
+    should("fail startup when a customTypes override tags a sealed variant differently") {
+        val foreignTag = mapOf("type" to EnumDefinition(enum = setOf("OTHER")))
+        val conflict = shouldThrow<UnsupportedSchemaException> {
+            testApplication {
+                install(ContentNegotiation) { json() }
+                install(OpenApi) {
+                    spec = openApiSpec()
+                    customTypes = mapOf(
+                        typeOf<DescUnnamedVariants.First>() to
+                            TypeDefinition(type = "object", properties = foreignTag, required = foreignTag.keys),
+                    )
+                }
+                routing {
+                    get<NoParamsPayload, UnnamedHolderResponse>("/unnamed") {
+                        UnnamedHolderResponse(ResponseBody(UnnamedHolder(DescUnnamedVariants.First(1))))
+                    }
+                }
+                startApplication()
+            }
+        }
+        conflict.message shouldContain "GET /unnamed"
+        conflict.message shouldContain "'openapi.DescUnnamedVariants.First'"
+    }
+
+    should("emit no half-built component when the reflection path takes over") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                serveOpenApiSpec("/openapi.json")
+                get<NoParamsPayload, NoDescriptorResponse>("/no-descriptor") {
+                    NoDescriptorResponse(ResponseBody(NoDescriptorHolder(NoDescriptor(1))))
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val schemas = specJson.at("components", "schemas").jsonObject
+            schemas.filter { (name, schema) ->
+                schema == Json.parseToJsonElement("""{"${'$'}ref": "#/components/schemas/$name"}""")
+            }.keys shouldBe setOf()
+            schemas.getValue("NoDescriptorHolder").jsonObject.at("properties").jsonObject.keys shouldBe setOf("inner")
+        }
+    }
+
     should("fail startup when a sealed body cannot be described") {
-        shouldThrow<UnsupportedSchemaException> {
+        val clash = shouldThrow<UnsupportedSchemaException> {
             testApplication {
                 install(ContentNegotiation) { json() }
                 install(OpenApi) {
@@ -511,7 +582,11 @@ class OpenApiIntegrationTest : ShouldSpec({
                 }
                 startApplication()
             }
-        }.message shouldContain "GET /clashing"
+        }
+        val refusal = "Cannot describe sealed variant 'CLASH': " +
+            "kotlinx refuses to encode its property 'status' next to the tag"
+        clash.message shouldBe "Cannot document GET /clashing: $refusal"
+        generateSequence<Throwable>(clash) { it.cause }.map { it.message }.toList() shouldContain refusal
         shouldThrow<UnsupportedSchemaException> {
             testApplication {
                 install(ContentNegotiation) { json() }

@@ -27,6 +27,7 @@ import openapi.schema.slug
 import openapi.schema.ArrayDefinition
 import openapi.schema.EnumDefinition
 import openapi.schema.ReferenceDefinition
+import openapi.schema.COMPONENT_SLUG
 import openapi.schema.referenceSlug
 import org.slf4j.LoggerFactory
 import kotlin.reflect.KClass
@@ -325,6 +326,8 @@ private fun schemaFromType(
             type,
             e.message,
         )
+        // The failed attempt leaves its placeholders behind, and the fallback would return them as components.
+        cache.entries.removeIf { (slug, schema) -> schema == ReferenceDefinition("$COMPONENT_SLUG/$slug") }
         SchemaGenerator.fromTypeToSchema(type, json, cache, slugOwners)
     }
     if (schema is TypeDefinition && schema.properties != null || schema is EnumDefinition) {

@@ -36,7 +36,9 @@ import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaField
 
-class UnsupportedSchemaException(message: String, cause: Throwable?) : RuntimeException(message, cause)
+class UnsupportedSchemaException(message: String, cause: Throwable?) : RuntimeException(message, cause) {
+    constructor(message: String) : this(message, null)
+}
 
 @OptIn(ExperimentalSerializationApi::class)
 object SchemaGenerator {
@@ -259,8 +261,10 @@ object SchemaGenerator {
         if (!isObject) return fromDescriptor(descriptor, json, cache, slugOwners, outerSlug)
         refuseUndescribable(descriptor.serialName, descriptor.elementNames, discriminator, json)
         val slug = when (descriptor.classDiscriminator(json) == discriminator) {
-            true -> descriptor.slug(slugOwners, outerSlug, discriminator)
-            false -> descriptor.slug(slugOwners, outerSlug, discriminator, outerSlug)
+            true -> descriptor.slug(slugOwners, outerSlug = outerSlug, discriminator = discriminator)
+            false -> descriptor.slug(
+                slugOwners, outerSlug = outerSlug, discriminator = discriminator, parent = outerSlug,
+            )
         }
         return taggedVariant(slug, discriminator, descriptor.serialName, cache) {
             descriptorObjectDefinition(descriptor, json, cache, slugOwners)
@@ -284,8 +288,10 @@ object SchemaGenerator {
         val cached = cache[slug]
         cached?.let { if (it !is TypeDefinition || it.type != "object") return it }
         val existing = cached as? TypeDefinition
-        check(existing?.properties?.get(discriminator).let { it == null || it == tag }) {
-            "Component '$slug' is already tagged for another variant"
+        existing?.properties?.get(discriminator)?.takeIf { it != tag }?.let {
+            throw UnsupportedSchemaException(
+                "Cannot describe sealed variant '$serialName': its cached schema already sets '$discriminator' to $it",
+            )
         }
         cache[slug] = reference
         val base = existing ?: build()
@@ -304,7 +310,7 @@ object SchemaGenerator {
             discriminator in names -> "kotlinx refuses to encode its property '$discriminator' next to the tag"
             else -> return
         }
-        throw UnsupportedSchemaException("Cannot describe sealed variant '$variant': $reason", null)
+        throw UnsupportedSchemaException("Cannot describe sealed variant '$variant': $reason")
     }
 
     // --- KType-based entry points (bridge to descriptor-based implementation) ---
@@ -474,8 +480,8 @@ object SchemaGenerator {
             ?: checkNotNull(clazz.qualifiedName)
         refuseUndescribable(serialName, descriptor?.elementNames ?: listOf(), discriminator, json)
         val slug = when (descriptor.classDiscriminator(json) == discriminator) {
-            true -> type.slug(slugOwners, discriminator)
-            false -> type.slug(slugOwners, discriminator, outer.slug(slugOwners))
+            true -> type.slug(slugOwners, discriminator = discriminator)
+            false -> type.slug(slugOwners, discriminator = discriminator, parent = outer.slug(slugOwners))
         }
         return taggedVariant(slug, discriminator, serialName, cache) {
             degradeToObject(TypeDefinition(type = "object")) {

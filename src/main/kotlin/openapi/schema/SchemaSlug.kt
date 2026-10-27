@@ -42,19 +42,24 @@ private fun resolveSlug(
     slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     longSlug: () -> String,
 ): String {
-    val slug = SchemaSlug(shortSlug)
-    val owner = slugOwners[slug]
-    if (owner == null || owner == identity.untagged()) {
-        slugOwners[slug] = identity
-        return shortSlug
-    }
-    if (owner == identity || owner.untagged() == identity) return shortSlug
+    if (slugOwners.claim(shortSlug, identity)) return shortSlug
     // Reuse this identity's previously-assigned disambiguated slug, if any, instead of
     // recomputing a fresh one on every repeated collision.
     slugOwners.entries.firstOrNull { it.value == identity }?.let { return it.key.value }
     val disambiguated = longSlug()
-    slugOwners[SchemaSlug(disambiguated)] = identity
-    return disambiguated
+    if (slugOwners.claim(disambiguated, identity)) return disambiguated
+    val unique = "${disambiguated}_${Integer.toHexString(identity.hashCode())}"
+    slugOwners[SchemaSlug(unique)] = identity
+    return unique
+}
+
+private fun MutableMap<SchemaSlug, ClassIdentity>.claim(slug: String, identity: ClassIdentity): Boolean {
+    val owner = this[SchemaSlug(slug)]
+    if (owner == null || owner == identity.untagged()) {
+        this[SchemaSlug(slug)] = identity
+        return true
+    }
+    return owner == identity || owner.untagged() == identity
 }
 
 fun KType.slug(

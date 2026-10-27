@@ -251,6 +251,58 @@ data class DescOkHolder(val ok: DescStatusOutcome.Ok)
 @Serializable
 sealed interface DescDottedSecond
 
+// DescClaimHolder.V loses "LEAF" to DescPlainSlugSquatter, and its long slug is DescClaimHolderLEAF's own slug.
+@Serializable
+sealed interface DescClaimOther
+
+@Serializable
+data class DescClaimHolderLEAF(val other: String) : DescClaimOther
+
+@Serializable
+sealed interface DescClaimHolder {
+    @Serializable
+    @SerialName("LEAF")
+    data class V(val v: Int) : DescClaimHolder
+}
+
+@Serializable
+@SerialName("x.OK")
+data class DescOkSquatter(val other: String)
+
+@Serializable
+@SerialName("DONE")
+data class DescPlainDone(val id: String)
+
+@Serializable
+@SerialName("OK")
+data class DescPlainOk(val id: Int)
+
+@Serializable
+data class DescPlainDoneHolder(val done: DescPlainDone)
+
+@Serializable
+data class DescPlainOkHolder(val ok: DescPlainOk)
+
+// The reflection path drops the package from class names, so openapiTwin shortens to the same name as Twin.
+@Serializable
+sealed interface DescTwinOuter
+
+@Serializable
+sealed interface DescTwinSecond
+
+@Serializable
+@JsonClassDiscriminator("kind")
+sealed interface DescTwinInner : DescTwinOuter, DescTwinSecond {
+    @Serializable
+    @SerialName("A")
+    data class Twin(val a: Int) : DescTwinInner
+
+    @Serializable
+    @SerialName("B")
+    @Suppress("ClassName")
+    data class openapiTwin(val b: Int) : DescTwinInner
+}
+
 // Both Leaf variants shorten to "Leaf" under DescDottedOuter, which tags them with a name that is not their own.
 @Serializable
 sealed interface DescDottedOuter {
@@ -1171,6 +1223,28 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         shouldMatchWire(two, cache, json, PkgTwoHierarchy.serializer(), listOf(PkgTwoHierarchy.Inner.Nested("2")))
     }
 
+    should("name foreign-tagged variants per parent and keep colliding names apart via the reflection-based path") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        fun refs(type: KType) = SchemaGenerator.fromTypeToSchema(type, json, cache, slugOwners)
+            .shouldBeInstanceOf<AnyOfDefinition>().anyOf
+            .flatMap { (it as? AnyOfDefinition)?.anyOf ?: setOf(it) }
+            .map { it.shouldBeInstanceOf<ReferenceDefinition>().`$ref`.removePrefix("#/components/schemas/") }
+            .toSet()
+        refs(typeOf<PkgOneHierarchy>()) shouldBe setOf("Hierarchy.HierarchyInnerNested")
+        refs(typeOf<PkgTwoHierarchy>()) shouldBe setOf("openapifixturespkgtwoHierarchy.HierarchyInnerNested")
+        refs(typeOf<DescTwinOuter>()) shouldBe setOf(
+            "DescTwinOuter.DescTwinInnerTwin",
+            "DescTwinOuter.openapiDescTwinInneropenapiTwin",
+        )
+        refs(typeOf<DescTwinSecond>()) shouldBe setOf(
+            "DescTwinSecond.DescTwinInnerTwin",
+            "DescTwinSecond.openapiDescTwinInneropenapiTwin",
+        )
+        cache["DescTwinSecond.openapiDescTwinInneropenapiTwin"] shouldBe
+            variant("type", "B", mapOf("b" to TypeDefinition.INT))
+    }
+
     should("give a shared variant one component per discriminator via the reflection-based schema path") {
         val outer = typeOf<DescNestedOuter>()
         val inner = typeOf<DescNestedOuter.Inner>()
@@ -1272,13 +1346,41 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     }
 
     should("refuse to tag a cached variant that already carries another variant's tag") {
-        val foreignTag = mapOf("type" to EnumDefinition(enum = setOf("OTHER")))
+        val foreignTag = mapOf("status" to EnumDefinition(enum = setOf("OTHER")))
         val cache = mutableMapOf<String, JsonSchema>(
-            "LIT" to TypeDefinition(type = "object", properties = foreignTag, required = foreignTag.keys),
+            "CREATED" to TypeDefinition(type = "object", properties = foreignTag, required = foreignTag.keys),
         )
-        shouldThrow<IllegalStateException> {
-            SchemaGenerator.fromDescriptor(DescExpr.serializer().descriptor, json, cache, mutableMapOf())
-        }
+        shouldThrow<UnsupportedSchemaException> {
+            SchemaGenerator.fromDescriptor(DescAnnotatedResult.serializer().descriptor, json, cache, mutableMapOf())
+        }.message shouldBe "Cannot describe sealed variant 'CREATED': its cached schema already sets 'status' to " +
+            "EnumDefinition(enum=[OTHER], type=null)"
+    }
+
+    should("give a variant whose long slug another class owns a slug of its own") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val other = SchemaGenerator.fromDescriptor(DescClaimOther.serializer().descriptor, json, cache, slugOwners)
+        SchemaGenerator.fromDescriptor(DescPlainSlugSquatter.serializer().descriptor, json, cache, slugOwners)
+        val holder = SchemaGenerator.fromDescriptor(DescClaimHolder.serializer().descriptor, json, cache, slugOwners)
+        other shouldBe AnyOfDefinition(setOf(ReferenceDefinition("#/components/schemas/DescClaimHolderLEAF")))
+        holder shouldBe AnyOfDefinition(setOf(ReferenceDefinition("#/components/schemas/DescClaimHolderLEAF_ea34ef61")))
+        shouldMatchWire(other, cache, json, DescClaimOther.serializer(), listOf(DescClaimHolderLEAF("o")))
+        shouldMatchWire(holder, cache, json, DescClaimHolder.serializer(), listOf(DescClaimHolder.V(1)))
+    }
+
+    should("give same-shaped plain classes with different serial names their own components") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        SchemaGenerator.fromDescriptor(DescOkSquatter.serializer().descriptor, json, cache, slugOwners)
+        SchemaGenerator.fromDescriptor(DescPlainDoneHolder.serializer().descriptor, json, cache, slugOwners)
+        val ok = SchemaGenerator.fromDescriptor(DescPlainOkHolder.serializer().descriptor, json, cache, slugOwners)
+        ok.shouldBeInstanceOf<TypeDefinition>().properties.orEmpty()["ok"] shouldBe
+            ReferenceDefinition("#/components/schemas/OK_5dacc873")
+        cache["OK_5dacc873"] shouldBe TypeDefinition(
+            type = "object",
+            properties = mapOf("id" to TypeDefinition.INT),
+            required = setOf("id"),
+        )
     }
 
     should("take the discriminator from the serializer kotlinx uses via the reflection-based schema path") {
