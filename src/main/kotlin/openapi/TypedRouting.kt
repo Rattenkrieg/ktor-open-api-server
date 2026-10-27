@@ -576,7 +576,7 @@ fun registerRouteSpec(
         val json = route.application.attributes.getOrNull(OpenApiJsonKey) ?: Json.Default
         addRouteToSpec(spec, path, method, requestType, responseType, tags, security, json)
     } catch (e: UnsupportedSchemaException) {
-        throw e
+        throw UnsupportedSchemaException("Cannot document ${method.value} $path: ${e.message}", e)
     } catch (e: Exception) {
         route.application.log.warn("Failed to register OpenAPI spec for $method $path: ${e.message}")
     }

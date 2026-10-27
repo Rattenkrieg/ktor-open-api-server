@@ -36,7 +36,7 @@ import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaField
 
-class UnsupportedSchemaException(message: String) : RuntimeException(message)
+class UnsupportedSchemaException(message: String, cause: Throwable?) : RuntimeException(message, cause)
 
 @OptIn(ExperimentalSerializationApi::class)
 object SchemaGenerator {
@@ -49,7 +49,6 @@ object SchemaGenerator {
         // Set only for a sealed/polymorphic child — see disambiguateByShape in SchemaSlug.kt.
         outerSlug: String? = null,
     ): JsonSchema {
-        json.refuseAllJsonObjects()
         if (descriptor.isInline) {
             val inner = descriptor.getElementDescriptor(0)
             return fromDescriptor(inner, json, cache, slugOwners)
@@ -261,7 +260,7 @@ object SchemaGenerator {
         refuseUndescribable(descriptor.serialName, descriptor.elementNames, discriminator, json)
         val slug = when (descriptor.classDiscriminator(json) == discriminator) {
             true -> descriptor.slug(slugOwners, outerSlug, discriminator)
-            false -> descriptor.foreignVariantSlug(outerSlug)
+            false -> descriptor.slug(slugOwners, outerSlug, discriminator, outerSlug)
         }
         return taggedVariant(slug, discriminator, descriptor.serialName, cache) {
             descriptorObjectDefinition(descriptor, json, cache, slugOwners)
@@ -281,13 +280,18 @@ object SchemaGenerator {
         build: () -> TypeDefinition,
     ): JsonSchema {
         val reference = ReferenceDefinition("$COMPONENT_SLUG/$slug")
+        val tag = EnumDefinition(enum = setOf(serialName))
         val cached = cache[slug]
-        cached?.let { if (it == reference || it !is TypeDefinition || it.type != "object") return it }
+        cached?.let { if (it !is TypeDefinition || it.type != "object") return it }
+        val existing = cached as? TypeDefinition
+        check(existing?.properties?.get(discriminator).let { it == null || it == tag }) {
+            "Component '$slug' is already tagged for another variant"
+        }
         cache[slug] = reference
-        val base = cached as? TypeDefinition ?: build()
+        val base = existing ?: build()
         cache[slug] = base.copy(
             required = base.required.orEmpty() + discriminator,
-            properties = base.properties.orEmpty() + (discriminator to EnumDefinition(enum = setOf(serialName))),
+            properties = base.properties.orEmpty() + (discriminator to tag),
         )
         return reference
     }
@@ -300,16 +304,7 @@ object SchemaGenerator {
             discriminator in names -> "kotlinx refuses to encode its property '$discriminator' next to the tag"
             else -> return
         }
-        throw UnsupportedSchemaException("Cannot describe sealed variant '$variant': $reason")
-    }
-
-    private fun Json.refuseAllJsonObjects() {
-        if (configuration.classDiscriminatorMode == ClassDiscriminatorMode.ALL_JSON_OBJECTS) {
-            throw UnsupportedSchemaException(
-                "ClassDiscriminatorMode.ALL_JSON_OBJECTS adds a discriminator to every object, which the schema " +
-                    "does not describe",
-            )
-        }
+        throw UnsupportedSchemaException("Cannot describe sealed variant '$variant': $reason", null)
     }
 
     // --- KType-based entry points (bridge to descriptor-based implementation) ---
@@ -320,7 +315,6 @@ object SchemaGenerator {
         cache: MutableMap<String, JsonSchema>,
         slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
     ): JsonSchema {
-        json.refuseAllJsonObjects()
         val slug = type.slug(slugOwners)
         cache[slug]?.let { return it }
         return when (val clazz = type.classifier as KClass<*>) {
@@ -481,7 +475,7 @@ object SchemaGenerator {
         refuseUndescribable(serialName, descriptor?.elementNames ?: listOf(), discriminator, json)
         val slug = when (descriptor.classDiscriminator(json) == discriminator) {
             true -> type.slug(slugOwners, discriminator)
-            false -> type.foreignVariantSlug(outer, slugOwners)
+            false -> type.slug(slugOwners, discriminator, outer.slug(slugOwners))
         }
         return taggedVariant(slug, discriminator, serialName, cache) {
             degradeToObject(TypeDefinition(type = "object")) {

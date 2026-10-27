@@ -90,6 +90,8 @@ data class StateOutcomeResponse(val body: ResponseBody<DescStateOutcome>) : OkRe
 
 data class ExprResponse(val body: ResponseBody<DescExpr>) : OkResponsePayload()
 
+data class DottedResponse(val body: ResponseBody<DescDottedOuter>) : OkResponsePayload()
+
 data class ClashingResponse(val body: ResponseBody<DescClashingVariant>) : OkResponsePayload()
 
 @Serializable
@@ -460,6 +462,41 @@ class OpenApiIntegrationTest : ShouldSpec({
         }
     }
 
+    should("document foreign-tagged variants whose short names collide in separate components") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) {
+                spec = openApiSpec()
+            }
+            routing {
+                serveOpenApiSpec("/openapi.json")
+                get<NoParamsPayload, DottedResponse>("/dotted") {
+                    DottedResponse(ResponseBody(DescDottedOuter.Other(1)))
+                }
+            }
+            val specJson = Json.decodeFromString<JsonObject>(client.get("/openapi.json").bodyAsText())
+            val schemas = specJson.at("components", "schemas").jsonObject
+            schemas.getValue("DescDottedOuter.Leaf") shouldBe Json.parseToJsonElement(
+                """
+                {
+                  "type": "object",
+                  "properties": {"x": {"type": "number", "format": "int32"}, "type": {"enum": ["x.Leaf"]}},
+                  "required": ["x", "type"]
+                }
+                """,
+            )
+            schemas.getValue("DescDottedOuter.yLeaf") shouldBe Json.parseToJsonElement(
+                """
+                {
+                  "type": "object",
+                  "properties": {"y": {"type": "string"}, "type": {"enum": ["y.Leaf"]}},
+                  "required": ["y", "type"]
+                }
+                """,
+            )
+        }
+    }
+
     should("fail startup when a sealed body cannot be described") {
         shouldThrow<UnsupportedSchemaException> {
             testApplication {
@@ -474,7 +511,7 @@ class OpenApiIntegrationTest : ShouldSpec({
                 }
                 startApplication()
             }
-        }
+        }.message shouldContain "GET /clashing"
         shouldThrow<UnsupportedSchemaException> {
             testApplication {
                 install(ContentNegotiation) { json() }

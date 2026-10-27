@@ -32,6 +32,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.polymorphic
+import kotlinx.serialization.modules.subclass
+import kotlinx.serialization.serializer
 import kotlinx.serialization.modules.contextual
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
@@ -51,7 +54,9 @@ import openapi.schema.SchemaSlug
 import openapi.schema.TypeDefinition
 import openapi.schema.UnsupportedSchemaException
 import openapi.schema.slug
+import openapi.fixtures.pkgone.Hierarchy as PkgOneHierarchy
 import openapi.fixtures.pkgone.Status as PkgOneStatus
+import openapi.fixtures.pkgtwo.Hierarchy as PkgTwoHierarchy
 import openapi.fixtures.pkgtwo.Status as PkgTwoStatus
 import openapi.fixtures.pkgone.SharedName as SharedNameOne
 import openapi.fixtures.pkgtwo.SharedName as SharedNameTwo
@@ -234,6 +239,44 @@ sealed interface DescStateOutcome {
     @Serializable
     @SerialName("DONE")
     data class Done(val id: String) : DescStateOutcome
+
+    @Serializable
+    @SerialName("OK")
+    data class Ok(val id: String) : DescStateOutcome
+}
+
+@Serializable
+data class DescOkHolder(val ok: DescStatusOutcome.Ok)
+
+// Both Leaf variants shorten to "Leaf" under DescDottedOuter, which tags them with a name that is not their own.
+@Serializable
+sealed interface DescDottedOuter {
+    @Serializable
+    @JsonClassDiscriminator("kind")
+    sealed interface Inner : DescDottedOuter {
+        @Serializable
+        @SerialName("x.Leaf")
+        data class XLeaf(val x: Int) : Inner
+
+        @Serializable
+        @SerialName("y.Leaf")
+        data class YLeaf(val y: String) : Inner
+
+        @Serializable
+        data class Unnamed(val z: Int) : Inner
+    }
+
+    @Serializable
+    @SerialName("OTHER")
+    data class Other(val value: Int) : DescDottedOuter
+}
+
+// Not @Serializable: kotlinx encodes it through a runtime PolymorphicSerializer, which ignores the annotation.
+@JsonClassDiscriminator("status")
+sealed interface DescModuleSealed {
+    @Serializable
+    @SerialName("MODULE")
+    data class Variant(val value: Int) : DescModuleSealed
 }
 
 @Serializable
@@ -959,6 +1002,21 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
             listOf(DescAnnotatedResult.Created("1"), DescAnnotatedResult.Failed("x"), DescAnnotatedResult.Pending),
         )
         check(kindJson, DescOutcome.serializer(), outcomes)
+        check(
+            Json { classDiscriminatorMode = ClassDiscriminatorMode.ALL_JSON_OBJECTS },
+            DescAnnotatedResult.serializer(),
+            listOf(DescAnnotatedResult.Created("1"), DescAnnotatedResult.Pending),
+        )
+        check(
+            Json.Default,
+            DescDottedOuter.serializer(),
+            listOf(
+                DescDottedOuter.Inner.XLeaf(1),
+                DescDottedOuter.Inner.YLeaf("y"),
+                DescDottedOuter.Inner.Unnamed(2),
+                DescDottedOuter.Other(3),
+            ),
+        )
         check(Json.Default, DescOutcome.serializer(), outcomes)
         check(
             Json.Default,
@@ -992,6 +1050,17 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
             listOf(DescAnnotatedResult.Created("1"), DescAnnotatedResult.Failed("x"), DescAnnotatedResult.Pending),
         )
         check(kindJson, typeOf<DescOutcome>(), DescOutcome.serializer(), outcomes)
+        check(
+            Json.Default,
+            typeOf<DescDottedOuter>(),
+            DescDottedOuter.serializer(),
+            listOf(
+                DescDottedOuter.Inner.XLeaf(1),
+                DescDottedOuter.Inner.YLeaf("y"),
+                DescDottedOuter.Inner.Unnamed(2),
+                DescDottedOuter.Other(3),
+            ),
+        )
         check(Json.Default, typeOf<DescOutcome>(), DescOutcome.serializer(), outcomes)
         check(
             Json.Default,
@@ -1052,15 +1121,46 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
             withClue("status hierarchy first: $statusFirst") {
                 val cache = mutableMapOf<String, JsonSchema>()
                 val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+                val holder = SchemaGenerator.fromDescriptor(
+                    DescOkHolder.serializer().descriptor, json, cache, slugOwners,
+                )
                 val order = listOf(status.descriptor, state.descriptor).let { if (statusFirst) it else it.reversed() }
                 val schemas = order.associateWith { SchemaGenerator.fromDescriptor(it, json, cache, slugOwners) }
                 val statusValues = listOf(DescStatusOutcome.None, DescStatusOutcome.Ok("1"))
                 shouldMatchWire(schemas.getValue(status.descriptor), cache, json, status, statusValues)
-                val stateValues = listOf(DescStateOutcome.None, DescStateOutcome.Done("1"))
+                val stateValues = listOf(DescStateOutcome.None, DescStateOutcome.Done("1"), DescStateOutcome.Ok("1"))
                 shouldMatchWire(schemas.getValue(state.descriptor), cache, json, state, stateValues)
-                cache["NONE"] shouldBe variant(if (statusFirst) "status" else "state", "NONE", mapOf())
+                val first = if (statusFirst) "status" else "state"
+                cache["NONE"] shouldBe variant(first, "NONE", mapOf())
+                cache["OK"] shouldBe variant(first, "OK", mapOf("id" to TypeDefinition.STRING))
+                holder.shouldBeInstanceOf<TypeDefinition>().properties.orEmpty()["ok"] shouldBe
+                    ReferenceDefinition("#/components/schemas/OK")
             }
         }
+    }
+
+    should("name foreign-tagged variants per parent and keep colliding short names apart") {
+        val cache = mutableMapOf<String, JsonSchema>()
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
+        val dotted = SchemaGenerator.fromDescriptor(DescDottedOuter.serializer().descriptor, json, cache, slugOwners)
+        val one = SchemaGenerator.fromDescriptor(PkgOneHierarchy.serializer().descriptor, json, cache, slugOwners)
+        val two = SchemaGenerator.fromDescriptor(PkgTwoHierarchy.serializer().descriptor, json, cache, slugOwners)
+        dotted shouldBe AnyOfDefinition(
+            listOf(
+                "DescDottedOuter.DescDottedOuterInnerUnnamed",
+                "DescDottedOuter.Leaf",
+                "DescDottedOuter.yLeaf",
+                "OTHER",
+            ).map { ReferenceDefinition("#/components/schemas/$it") }.toSet(),
+        )
+        cache["DescDottedOuter.Leaf"] shouldBe variant("type", "x.Leaf", mapOf("x" to TypeDefinition.INT))
+        cache["DescDottedOuter.yLeaf"] shouldBe variant("type", "y.Leaf", mapOf("y" to TypeDefinition.STRING))
+        one shouldBe AnyOfDefinition(setOf(ReferenceDefinition("#/components/schemas/Hierarchy.NESTED")))
+        two shouldBe AnyOfDefinition(
+            setOf(ReferenceDefinition("#/components/schemas/openapifixturespkgtwoHierarchy.NESTED")),
+        )
+        shouldMatchWire(one, cache, json, PkgOneHierarchy.serializer(), listOf(PkgOneHierarchy.Inner.Nested(1)))
+        shouldMatchWire(two, cache, json, PkgTwoHierarchy.serializer(), listOf(PkgTwoHierarchy.Inner.Nested("2")))
     }
 
     should("give a shared variant one component per discriminator via the reflection-based schema path") {
@@ -1163,6 +1263,28 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         objectCache["LIT"] shouldBe variant("type", "LIT", custom)
     }
 
+    should("refuse to tag a cached variant that already carries another variant's tag") {
+        val foreignTag = mapOf("type" to EnumDefinition(enum = setOf("OTHER")))
+        val cache = mutableMapOf<String, JsonSchema>(
+            "LIT" to TypeDefinition(type = "object", properties = foreignTag, required = foreignTag.keys),
+        )
+        shouldThrow<IllegalStateException> {
+            SchemaGenerator.fromDescriptor(DescExpr.serializer().descriptor, json, cache, mutableMapOf())
+        }
+    }
+
+    should("take the discriminator from the serializer kotlinx uses via the reflection-based schema path") {
+        val moduleJson = Json {
+            serializersModule = SerializersModule {
+                polymorphic(DescModuleSealed::class) { subclass(DescModuleSealed.Variant::class) }
+            }
+        }
+        val cache = mutableMapOf<String, JsonSchema>()
+        val schema = SchemaGenerator.fromTypeToSchema(typeOf<DescModuleSealed>(), moduleJson, cache, mutableMapOf())
+        val serializer = moduleJson.serializersModule.serializer(typeOf<DescModuleSealed>())
+        shouldMatchWire(schema, cache, moduleJson, serializer, listOf(DescModuleSealed.Variant(1)))
+    }
+
     should("leave an enum variant untagged") {
         val (schema, _) = generate(DescOddVariants.serializer().descriptor)
         schema.shouldBeInstanceOf<AnyOfDefinition>().anyOf shouldContain EnumDefinition(enum = setOf("ON"))
@@ -1190,7 +1312,6 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
     should("refuse Json configurations whose discriminators the schema cannot describe") {
         listOf(
             Json { classDiscriminatorMode = ClassDiscriminatorMode.NONE },
-            Json { classDiscriminatorMode = ClassDiscriminatorMode.ALL_JSON_OBJECTS },
             Json { useArrayPolymorphism = true },
         ).forEach { configured ->
             shouldThrow<UnsupportedSchemaException> {
