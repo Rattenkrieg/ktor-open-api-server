@@ -273,8 +273,8 @@ object SchemaGenerator {
         if (!isObject) return fromDescriptor(descriptor, json, cache, slugOwners, outerSlug)
         refuseUndescribable(descriptor.serialName, descriptor.elementNames, discriminator, json)
         val slug = when (descriptor.classDiscriminator(json) == discriminator) {
-            true -> descriptor.slug(slugOwners, outerSlug = outerSlug, discriminator = discriminator)
-            false -> descriptor.slug(slugOwners, discriminator = discriminator, parent = outerSlug)
+            true -> descriptor.slug(slugOwners, outerSlug = outerSlug, discriminator = discriminator, parent = null)
+            false -> descriptor.slug(slugOwners, outerSlug = null, discriminator = discriminator, parent = outerSlug)
         }
         return taggedVariant(slug, discriminator, descriptor.serialName, cache) {
             descriptorObjectDefinition(descriptor, json, cache, slugOwners)
@@ -490,7 +490,7 @@ object SchemaGenerator {
             ?: checkNotNull(clazz.qualifiedName)
         refuseUndescribable(serialName, descriptor?.elementNames ?: listOf(), discriminator, json)
         val slug = when (descriptor.classDiscriminator(json) == discriminator) {
-            true -> type.slug(slugOwners, discriminator = discriminator)
+            true -> type.slug(slugOwners, discriminator = discriminator, parent = null)
             false -> type.slug(slugOwners, discriminator = discriminator, parent = outer.slug(slugOwners))
         }
         return taggedVariant(slug, discriminator, serialName, cache) {

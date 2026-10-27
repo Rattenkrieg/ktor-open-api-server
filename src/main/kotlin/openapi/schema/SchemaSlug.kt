@@ -61,19 +61,23 @@ private fun MutableMap<SchemaSlug, ClassIdentity>.claim(slug: String, identity: 
     return owner == identity || owner.untagged() == identity
 }
 
-fun KType.slug(
+fun KType.slug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
+    slug(slugOwners, discriminator = null, parent = null)
+
+internal fun KType.slug(
     slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
-    discriminator: String? = null,
-    parent: String? = null,
+    discriminator: String?,
+    parent: String?,
 ): String = when {
     arguments.isNotEmpty() -> {
         val clazz = classifier as KClass<*>
         val classNames = arguments.map {
-            (it.type?.classifier as? KClass<*>)?.schemaSlug(slugOwners, null, null) ?: "Any"
+            (it.type?.classifier as? KClass<*>)?.schemaSlug(slugOwners, discriminator = null, parent = null) ?: "Any"
         }
-        classNames.joinToString(separator = "-", prefix = "${clazz.schemaSlug(slugOwners, discriminator, parent)}-")
+        val classSlug = clazz.schemaSlug(slugOwners, discriminator = discriminator, parent = parent)
+        classNames.joinToString(separator = "-", prefix = "$classSlug-")
     }
-    else -> (classifier as KClass<*>).schemaSlug(slugOwners, discriminator, parent)
+    else -> (classifier as KClass<*>).schemaSlug(slugOwners, discriminator = discriminator, parent = parent)
 }
 
 fun KType.referenceSlug(slugOwners: MutableMap<SchemaSlug, ClassIdentity>): String =
@@ -96,14 +100,20 @@ private fun disambiguateByShape(shortSlug: String, outerSlug: String?, shape: Cl
 private fun shapeHash(shape: ClassIdentity.ByShape): String =
     Integer.toHexString((shape.kind + shape.elementNames.joinToString(",")).hashCode())
 
-// A parent that tags a variant with a name other than the variant's own gets "<parent>.<variant>". "." never
-// occurs in a class slug, so these names only compete with each other.
 @OptIn(ExperimentalSerializationApi::class)
 fun SerialDescriptor.slug(
     slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
-    discriminator: String? = null,
-    parent: String? = null,
     outerSlug: String? = null,
+): String = slug(slugOwners, outerSlug = outerSlug, discriminator = null, parent = null)
+
+// A parent that tags a variant with a name other than the variant's own gets "<parent>.<variant>". "." never
+// occurs in a class slug, so these names only compete with each other.
+@OptIn(ExperimentalSerializationApi::class)
+internal fun SerialDescriptor.slug(
+    slugOwners: MutableMap<SchemaSlug, ClassIdentity>,
+    outerSlug: String?,
+    discriminator: String?,
+    parent: String?,
 ): String {
     val name = serialName.removeSuffix("?")
     val shortSlug = shortSlugParts(name).joinToString("")

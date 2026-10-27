@@ -1517,6 +1517,14 @@ class SchemaGeneratorDescriptorTest : ShouldSpec({
         b shouldBe a
     }
 
+    should("read the second positional argument of a descriptor slug as the outer slug, as 0.15.0 did") {
+        val descriptor = buildClassSerialDescriptor("Leaf") { element<Int>("v") }
+        val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>(
+            SchemaSlug("Leaf") to ClassIdentity.ByQualifiedName("x.Leaf"),
+        )
+        descriptor.slug(slugOwners, "Outer") shouldBe "OuterLeaf"
+    }
+
     should("give same-shaped plain classes with different serial names their own components") {
         val cache = mutableMapOf<String, JsonSchema>()
         val slugOwners = mutableMapOf<SchemaSlug, ClassIdentity>()
