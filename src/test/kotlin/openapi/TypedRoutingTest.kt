@@ -9,15 +9,19 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.string.shouldContain
+import io.kotest.assertions.withClue
 import io.kotest.matchers.types.shouldBeInstanceOf
+import io.kotest.matchers.types.shouldBeTypeOf
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import io.ktor.server.engine.defaultExceptionStatusCode
 import io.ktor.server.plugins.MissingRequestParameterException
 import io.ktor.server.plugins.ParameterConversionException
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.auth.*
 import io.ktor.server.routing.*
@@ -155,6 +159,10 @@ data class RequiredQueryListPayload(
 
 data class MismatchedPathParamPayload(
     val id: PathParam,
+) : RequestPayload
+
+data class RequiredPrincipalPayload(
+    val user: Principal<String>,
 ) : RequestPayload
 
 data class RedirectPayload(
@@ -1967,6 +1975,198 @@ class TypedRoutingTest : ShouldSpec({
             val response = client.get("/items/42")
             response.status shouldBe HttpStatusCode.InternalServerError
             response.bodyAsText() shouldContain "java.lang.IllegalStateException: Missing path parameter: id"
+        }
+    }
+
+    should("keep a missing Principal a server error") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/me") {
+                    get<RequiredPrincipalPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("user" to payload.user.value))
+                    }
+                }
+            }
+            val response = client.get("/me")
+            response.status shouldBe HttpStatusCode.InternalServerError
+            val body = response.bodyAsText()
+            body shouldContain "java.lang.IllegalStateException: No authenticated principal of type String"
+        }
+    }
+
+    should("extract nullable QueryParamList as null when absent") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items/{id}/search") {
+                    get<NamedQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("flowTypes" to (payload.flowType?.value?.joinToString(",") ?: "null")))
+                    }
+                }
+            }
+            val response = client.get("/items/42/search")
+            response.status shouldBe HttpStatusCode.OK
+            Json.decodeFromString<Map<String, String>>(response.bodyAsText()) shouldBe mapOf("flowTypes" to "null")
+        }
+    }
+
+    should("respond 400 when a required IntQueryParam overflows Int or carries a fraction") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<IntQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("page" to payload.page.value.toString()))
+                    }
+                }
+            }
+            for (page in listOf("2147483648", "-2147483649", "1.5", "1.0")) {
+                withClue(page) {
+                    val response = client.get("/items?page=$page")
+                    response.status shouldBe HttpStatusCode.BadRequest
+                    response.bodyAsText() shouldBe "Request parameter page couldn't be parsed/converted to Int"
+                }
+            }
+        }
+    }
+
+    should("respond 400 when a required LongQueryParam overflows Long or carries a fraction") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<LongQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("cursor" to payload.cursor.value.toString()))
+                    }
+                }
+            }
+            for (cursor in listOf("9223372036854775808", "-9223372036854775809", "1.5", "1.0")) {
+                withClue(cursor) {
+                    val response = client.get("/items?cursor=$cursor")
+                    response.status shouldBe HttpStatusCode.BadRequest
+                    response.bodyAsText() shouldBe "Request parameter cursor couldn't be parsed/converted to Long"
+                }
+            }
+        }
+    }
+
+    should("respond 400 with a ParameterConversionException when a required CookieParam is malformed") {
+        testApplication {
+            var caught: Throwable? = null
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            install(StatusPages) {
+                exception<Throwable> { call, cause ->
+                    caught = cause
+                    call.respond(defaultExceptionStatusCode(cause) ?: HttpStatusCode.InternalServerError)
+                }
+            }
+            routing {
+                route("/items/{id}") {
+                    get<CookiePayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("session" to payload.session.value))
+                    }
+                }
+            }
+            val response = client.get("/items/42") {
+                header("Cookie", "session_id=%ZZ")
+            }
+            response.status shouldBe HttpStatusCode.BadRequest
+            val exception = caught.shouldBeTypeOf<ParameterConversionException>()
+            exception.parameterName shouldBe "session_id"
+            exception.type shouldBe "cookie"
+            exception.cause.shouldBeTypeOf<URLDecodeException>()
+        }
+    }
+
+    should("respond 400 with a ParameterConversionException when a nullable CookieParam is malformed") {
+        testApplication {
+            var caught: Throwable? = null
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            install(StatusPages) {
+                exception<Throwable> { call, cause ->
+                    caught = cause
+                    call.respond(defaultExceptionStatusCode(cause) ?: HttpStatusCode.InternalServerError)
+                }
+            }
+            routing {
+                route("/items/{id}") {
+                    get<CookiePayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("tracking" to (payload.tracking?.value ?: "null")))
+                    }
+                }
+            }
+            val response = client.get("/items/42") {
+                header("Cookie", "session_id=abc123; tracking=%ZZ")
+            }
+            response.status shouldBe HttpStatusCode.BadRequest
+            val exception = caught.shouldBeTypeOf<ParameterConversionException>()
+            exception.parameterName shouldBe "tracking"
+            exception.type shouldBe "cookie"
+            exception.cause.shouldBeTypeOf<URLDecodeException>()
+        }
+    }
+
+    should("hand StatusPages the exact ktor exception at every client-controllable throw site") {
+        testApplication {
+            var caught: Throwable? = null
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            install(StatusPages) {
+                exception<Throwable> { call, cause ->
+                    caught = cause
+                    call.respondText("handled", status = HttpStatusCode.BadRequest)
+                }
+            }
+            routing {
+                route("/query") { get<RequiredQueryPayload, Ok<Map<String, String>>> { Ok(mapOf()) } }
+                route("/int") { get<IntQueryPayload, Ok<Map<String, String>>> { Ok(mapOf()) } }
+                route("/long") { get<LongQueryPayload, Ok<Map<String, String>>> { Ok(mapOf()) } }
+                route("/list") { get<RequiredQueryListPayload, Ok<Map<String, String>>> { Ok(mapOf()) } }
+                route("/header/{id}") { get<RenamedHeaderPayload, Ok<Map<String, String>>> { Ok(mapOf()) } }
+                route("/cookie/{id}") { get<CookiePayload, Ok<Map<String, String>>> { Ok(mapOf()) } }
+            }
+            fun describe(cause: Throwable?) = when (cause) {
+                is MissingRequestParameterException ->
+                    "${cause::class.simpleName}(${cause.parameterName}, ${cause.parameterType})"
+                is ParameterConversionException -> {
+                    val origin = cause.cause?.let { it::class.simpleName }
+                    "${cause::class.simpleName}(${cause.parameterName}, ${cause.type}, $origin)"
+                }
+                else -> "$cause"
+            }
+            suspend fun rejectionOf(path: String, cookie: String?): String {
+                caught = null
+                client.get(path) { cookie?.let { header("Cookie", it) } }
+                return describe(caught)
+            }
+            mapOf(
+                "query missing" to rejectionOf("/query", null),
+                "Int missing" to rejectionOf("/int", null),
+                "Int unparseable" to rejectionOf("/int?page=abc", null),
+                "Long missing" to rejectionOf("/long", null),
+                "Long unparseable" to rejectionOf("/long?cursor=abc", null),
+                "query list missing" to rejectionOf("/list", null),
+                "header missing" to rejectionOf("/header/1", null),
+                "cookie missing" to rejectionOf("/cookie/1", null),
+                "cookie malformed" to rejectionOf("/cookie/1", "session_id=%ZZ"),
+            ) shouldBe mapOf(
+                "query missing" to "MissingRequestParameterException(status, query)",
+                "Int missing" to "MissingRequestParameterException(page, query)",
+                "Int unparseable" to "ParameterConversionException(page, Int, null)",
+                "Long missing" to "MissingRequestParameterException(cursor, query)",
+                "Long unparseable" to "ParameterConversionException(cursor, Long, null)",
+                "query list missing" to "MissingRequestParameterException(flow_type[], query)",
+                "header missing" to "MissingRequestParameterException(X-Custom-Header, header)",
+                "cookie missing" to "MissingRequestParameterException(session_id, cookie)",
+                "cookie malformed" to "ParameterConversionException(session_id, cookie, URLDecodeException)",
+            )
         }
     }
 })

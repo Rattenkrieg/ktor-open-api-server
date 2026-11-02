@@ -52,6 +52,8 @@ The handler receives `TypedContext<P>` where `payload` is fully extracted and ty
 | `PathParam` | Path segment `{name}` | `in: path` |
 | `QueryParam` | `?name=value` | `in: query` |
 | `QueryParam?` | Optional query param | `in: query, required: false` |
+| `IntQueryParam` | `?name=42` parsed as `Int` | `in: query, type: number, format: int32` |
+| `LongQueryParam` | `?name=42` parsed as `Long` | `in: query, type: number, format: int64` |
 | `QueryParamList` | `?name=a&name=b` | `in: query, type: array` |
 | `HeaderParam` | Request header | `in: header` |
 | `CookieParam` | Request cookie | *(not in spec)* |
@@ -71,6 +73,13 @@ data class MyPayload(
     @Name("page_size") val pageSize: QueryParam?,
 ) : RequestPayload
 ```
+
+A missing required query param, header or cookie throws `MissingRequestParameterException`.
+An `IntQueryParam` or `LongQueryParam` that does not parse, or a cookie with a bad percent escape, throws
+`ParameterConversionException`. Both extend `BadRequestException`, so ktor answers 400 by default.
+
+A `PathParam` that does not match the route template and a missing `Principal` throw `IllegalStateException`
+(500), because both are server wiring errors.
 
 ## Response types
 

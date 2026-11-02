@@ -156,9 +156,18 @@ private class HeaderParamExtractor(val httpName: String, val nullable: Boolean) 
 }
 
 private class CookieParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
-    override suspend fun extract(call: RoutingCall) =
-        if (nullable) call.request.cookies[httpName]?.let { CookieParam(it) }
-        else CookieParam(call.request.cookies[httpName] ?: throw MissingRequestParameterException(httpName, "cookie"))
+    override suspend fun extract(call: RoutingCall): Any? {
+        val value = read(call)
+        return if (nullable) value?.let { CookieParam(it) }
+        else CookieParam(value ?: throw MissingRequestParameterException(httpName, "cookie"))
+    }
+
+    private fun read(call: RoutingCall) =
+        try {
+            call.request.cookies[httpName]
+        } catch (cause: URLDecodeException) {
+            throw ParameterConversionException(httpName, "cookie", cause)
+        }
 }
 
 private class PrincipalExtractor(val principalClass: KClass<*>, val nullable: Boolean) : ParamExtractor {
