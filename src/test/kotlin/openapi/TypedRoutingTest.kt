@@ -9,11 +9,16 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
+import io.ktor.server.plugins.MissingRequestParameterException
+import io.ktor.server.plugins.ParameterConversionException
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.response.respondText
 import io.ktor.server.auth.*
 import io.ktor.server.routing.*
 import io.ktor.server.testing.*
@@ -138,6 +143,18 @@ data class IntQueryPayload(
 data class LongQueryPayload(
     val cursor: LongQueryParam,
     val limit: LongQueryParam?,
+) : RequestPayload
+
+data class RequiredQueryPayload(
+    val status: QueryParam,
+) : RequestPayload
+
+data class RequiredQueryListPayload(
+    @Name("flow_type[]") val flowType: QueryParamList,
+) : RequestPayload
+
+data class MismatchedPathParamPayload(
+    val id: PathParam,
 ) : RequestPayload
 
 data class RedirectPayload(
@@ -1709,6 +1726,247 @@ class TypedRoutingTest : ShouldSpec({
             val twoSlug = twoRef.removePrefix("#/components/schemas/")
             schemas[oneSlug]?.jsonObject?.get("properties")?.jsonObject?.keys shouldBe setOf("code")
             schemas[twoSlug]?.jsonObject?.get("properties")?.jsonObject?.keys shouldBe setOf("message")
+        }
+    }
+
+    should("respond 400 when a required QueryParam is missing") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<RequiredQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("status" to payload.status.value))
+                    }
+                }
+            }
+            val response = client.get("/items")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request query parameter status is missing"
+        }
+    }
+
+    should("respond 400 when a required IntQueryParam is missing") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<IntQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("page" to payload.page.value.toString()))
+                    }
+                }
+            }
+            val response = client.get("/items")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request query parameter page is missing"
+        }
+    }
+
+    should("respond 400 when a required LongQueryParam is missing") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<LongQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("cursor" to payload.cursor.value.toString()))
+                    }
+                }
+            }
+            val response = client.get("/items")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request query parameter cursor is missing"
+        }
+    }
+
+    should("respond 400 when a required QueryParamList is missing") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<RequiredQueryListPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("flowType" to payload.flowType.value.joinToString(",")))
+                    }
+                }
+            }
+            val response = client.get("/items")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request query parameter flow_type[] is missing"
+        }
+    }
+
+    should("respond 400 when a required HeaderParam is missing") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items/{id}") {
+                    get<RenamedHeaderPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("header" to payload.customHeader.value))
+                    }
+                }
+            }
+            val response = client.get("/items/42")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request header parameter X-Custom-Header is missing"
+        }
+    }
+
+    should("respond 400 when a required CookieParam is missing") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items/{id}") {
+                    get<CookiePayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("session" to payload.session.value))
+                    }
+                }
+            }
+            val response = client.get("/items/42") {
+                header("Cookie", "tracking=xyz789")
+            }
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request cookie parameter session_id is missing"
+        }
+    }
+
+    should("respond 400 when a required IntQueryParam is not a number") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<IntQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("page" to payload.page.value.toString()))
+                    }
+                }
+            }
+            val response = client.get("/items?page=abc")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request parameter page couldn't be parsed/converted to Int"
+        }
+    }
+
+    should("respond 400 when a nullable IntQueryParam is not a number") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<IntQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("size" to (payload.size?.value?.toString() ?: "null")))
+                    }
+                }
+            }
+            val response = client.get("/items?page=1&size=ten")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request parameter size couldn't be parsed/converted to Int"
+        }
+    }
+
+    should("respond 400 when a required LongQueryParam is not a number") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<LongQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("cursor" to payload.cursor.value.toString()))
+                    }
+                }
+            }
+            val response = client.get("/items?cursor=abc")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request parameter cursor couldn't be parsed/converted to Long"
+        }
+    }
+
+    should("respond 400 when a nullable LongQueryParam is not a number") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items") {
+                    get<LongQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("limit" to (payload.limit?.value?.toString() ?: "null")))
+                    }
+                }
+            }
+            val response = client.get("/items?cursor=1&limit=ten")
+            response.status shouldBe HttpStatusCode.BadRequest
+            response.bodyAsText() shouldBe "Request parameter limit couldn't be parsed/converted to Long"
+        }
+    }
+
+    should("hand StatusPages a MissingRequestParameterException for a missing HeaderParam") {
+        testApplication {
+            var caught: Throwable? = null
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            install(StatusPages) {
+                exception<Throwable> { call, cause ->
+                    caught = cause
+                    call.respondText("handled", status = HttpStatusCode.BadRequest)
+                }
+            }
+            routing {
+                route("/items/{id}") {
+                    get<RenamedHeaderPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("header" to payload.customHeader.value))
+                    }
+                }
+            }
+            val response = client.get("/items/42")
+            response.bodyAsText() shouldBe "handled"
+            val exception = caught.shouldBeInstanceOf<MissingRequestParameterException>()
+            exception.parameterName shouldBe "X-Custom-Header"
+            exception.parameterType shouldBe "header"
+        }
+    }
+
+    should("hand StatusPages a ParameterConversionException for a non-numeric IntQueryParam") {
+        testApplication {
+            var caught: Throwable? = null
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            install(StatusPages) {
+                exception<Throwable> { call, cause ->
+                    caught = cause
+                    call.respondText("handled", status = HttpStatusCode.BadRequest)
+                }
+            }
+            routing {
+                route("/items") {
+                    get<IntQueryPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("page" to payload.page.value.toString()))
+                    }
+                }
+            }
+            val response = client.get("/items?page=abc")
+            response.bodyAsText() shouldBe "handled"
+            val exception = caught.shouldBeInstanceOf<ParameterConversionException>()
+            exception.parameterName shouldBe "page"
+            exception.type shouldBe "Int"
+        }
+    }
+
+    should("keep a PathParam missing from the route template a server error") {
+        testApplication {
+            install(ContentNegotiation) { json() }
+            install(OpenApi) { spec = openApiSpec() }
+            routing {
+                route("/items/{itemId}") {
+                    get<MismatchedPathParamPayload, Ok<Map<String, String>>> {
+                        Ok(mapOf("id" to payload.id.value))
+                    }
+                }
+            }
+            val response = client.get("/items/42")
+            response.status shouldBe HttpStatusCode.InternalServerError
+            response.bodyAsText() shouldContain "java.lang.IllegalStateException: Missing path parameter: id"
         }
     }
 })

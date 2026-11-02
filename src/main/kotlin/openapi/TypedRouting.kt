@@ -118,39 +118,47 @@ private class PathParamExtractor(val name: String) : ParamExtractor {
 private class QueryParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
     override suspend fun extract(call: RoutingCall) =
         if (nullable) call.queryParameters[httpName]?.let { QueryParam(it) }
-        else QueryParam(call.queryParameters[httpName] ?: error("Missing query parameter: $httpName"))
+        else QueryParam(call.queryParameters[httpName] ?: throw MissingRequestParameterException(httpName, "query"))
 }
 
 private class IntQueryParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
-    override suspend fun extract(call: RoutingCall) =
-        if (nullable) call.queryParameters[httpName]?.let { IntQueryParam(it.toInt()) }
-        else IntQueryParam((call.queryParameters[httpName] ?: error("Missing query parameter: $httpName")).toInt())
+    override suspend fun extract(call: RoutingCall): Any? {
+        val value = call.queryParameters[httpName]
+        return if (nullable) value?.let { IntQueryParam(parse(it)) }
+        else IntQueryParam(parse(value ?: throw MissingRequestParameterException(httpName, "query")))
+    }
+
+    private fun parse(value: String) = value.toIntOrNull() ?: throw ParameterConversionException(httpName, "Int")
 }
 
 private class LongQueryParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
-    override suspend fun extract(call: RoutingCall) =
-        if (nullable) call.queryParameters[httpName]?.let { LongQueryParam(it.toLong()) }
-        else LongQueryParam((call.queryParameters[httpName] ?: error("Missing query parameter: $httpName")).toLong())
+    override suspend fun extract(call: RoutingCall): Any? {
+        val value = call.queryParameters[httpName]
+        return if (nullable) value?.let { LongQueryParam(parse(it)) }
+        else LongQueryParam(parse(value ?: throw MissingRequestParameterException(httpName, "query")))
+    }
+
+    private fun parse(value: String) = value.toLongOrNull() ?: throw ParameterConversionException(httpName, "Long")
 }
 
 private class QueryParamListExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
     override suspend fun extract(call: RoutingCall): Any? {
         val values = call.queryParameters.getAll(httpName)
         return if (nullable) values?.let { QueryParamList(it) }
-        else QueryParamList(values ?: error("Missing query parameter: $httpName"))
+        else QueryParamList(values ?: throw MissingRequestParameterException(httpName, "query"))
     }
 }
 
 private class HeaderParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
     override suspend fun extract(call: RoutingCall) =
         if (nullable) call.request.headers[httpName]?.let { HeaderParam(it) }
-        else HeaderParam(call.request.headers[httpName] ?: error("Missing header: $httpName"))
+        else HeaderParam(call.request.headers[httpName] ?: throw MissingRequestParameterException(httpName, "header"))
 }
 
 private class CookieParamExtractor(val httpName: String, val nullable: Boolean) : ParamExtractor {
     override suspend fun extract(call: RoutingCall) =
         if (nullable) call.request.cookies[httpName]?.let { CookieParam(it) }
-        else CookieParam(call.request.cookies[httpName] ?: error("Missing cookie: $httpName"))
+        else CookieParam(call.request.cookies[httpName] ?: throw MissingRequestParameterException(httpName, "cookie"))
 }
 
 private class PrincipalExtractor(val principalClass: KClass<*>, val nullable: Boolean) : ParamExtractor {
