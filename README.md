@@ -76,10 +76,13 @@ data class MyPayload(
 
 A missing required query param, header or cookie throws `MissingRequestParameterException`.
 An `IntQueryParam` or `LongQueryParam` that does not parse, or a cookie with a bad percent escape, throws
-`ParameterConversionException`. Both extend `BadRequestException`, so ktor answers 400 by default.
+`ParameterConversionException`. Both extend `BadRequestException`, so ktor answers 400 by default. Without a
+`StatusPages` handler, the 400 body is the exception message, for example
+`Request parameter session_id couldn't be parsed/converted to cookie`.
 
-A `PathParam` that does not match the route template and a missing `Principal` throw `IllegalStateException`
-(500), because both are server wiring errors.
+A `PathParam` whose name is not a `{name}` segment of the route and a missing `Principal` throw
+`IllegalStateException` (500), because both are server wiring errors. A `PathParam` for an optional `{name?}` segment
+throws the same error when the request leaves the segment out, so a client can cause this 500.
 
 ## Response types
 
