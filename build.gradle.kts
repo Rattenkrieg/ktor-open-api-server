@@ -30,6 +30,7 @@ dependencies {
 
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.ktor.server.forwarded.header)
+    testImplementation(libs.ktor.server.status.pages)
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
 

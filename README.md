@@ -52,6 +52,8 @@ The handler receives `TypedContext<P>` where `payload` is fully extracted and ty
 | `PathParam` | Path segment `{name}` | `in: path` |
 | `QueryParam` | `?name=value` | `in: query` |
 | `QueryParam?` | Optional query param | `in: query, required: false` |
+| `IntQueryParam` | `?name=42` parsed as `Int` | `in: query, type: number, format: int32` |
+| `LongQueryParam` | `?name=42` parsed as `Long` | `in: query, type: number, format: int64` |
 | `QueryParamList` | `?name=a&name=b` | `in: query, type: array` |
 | `HeaderParam` | Request header | `in: header` |
 | `CookieParam` | Request cookie | *(not in spec)* |
@@ -71,6 +73,16 @@ data class MyPayload(
     @Name("page_size") val pageSize: QueryParam?,
 ) : RequestPayload
 ```
+
+A missing required query param, header or cookie throws `MissingRequestParameterException`.
+An `IntQueryParam` or `LongQueryParam` that does not parse, or a cookie with a bad percent escape, throws
+`ParameterConversionException`. Both extend `BadRequestException`, so ktor answers 400 by default. Without a
+`StatusPages` handler, the 400 body is the exception message, for example
+`Request parameter session_id couldn't be parsed/converted to cookie`.
+
+A `PathParam` whose name is not a `{name}` segment of the route and a missing `Principal` throw
+`IllegalStateException` (500), because both are server wiring errors. A `PathParam` for an optional `{name?}` segment
+throws the same error when the request leaves the segment out, so a client can cause this 500.
 
 ## Response types
 
